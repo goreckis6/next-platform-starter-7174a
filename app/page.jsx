@@ -1,6 +1,89 @@
 // app/page.jsx
-import Home from "@/components/Home";
+import Link from "next/link";
+import styles from "./page.module.css";
 
 export default function Page() {
-  return <Home />;
+  return (
+    <main className={styles.container}>
+      {/* HERO */}
+      <section className={styles.hero}>
+        <h1>The most reliable bank statement converter</h1>
+        <p className={styles.lead}>
+          Convert PDF bank statements from thousands of banks into clean Excel (XLS) and CSV files.
+        </p>
+        <div className={styles.cta}>
+          <Link className={`${styles.btn} ${styles.btnPrimary}`} href="/dashboard">Try for free</Link>
+          <Link className={`${styles.btn} ${styles.btnGhost}`} href="/pricing">See pricing</Link>
+        </div>
+      </section>
+
+      {/* FEATURES */}
+      <section className={styles.features}>
+        <div className={styles.card}>
+          <h3>Secure</h3>
+          <p>We follow strict data-handling practices to keep your files safe during processing.</p>
+        </div>
+        <div className={styles.card}>
+          <h3>Institutional-grade</h3>
+          <p>Trusted by accounting, finance and legal teams to process statements at scale.</p>
+        </div>
+        <div className={styles.card}>
+          <h3>Accurate</h3>
+          <p>Our extraction improves continuously. If something looks off, tell us and we’ll fix it.</p>
+        </div>
+      </section>
+
+      {/* FREEMIUM TIERS */}
+      <section className={styles.tiers}>
+        <div className={styles.tier}>
+          <h2>Anonymous</h2>
+          <p className={styles.muted}>No sign-up required</p>
+          <ul>
+            <li>1 page every 24 hours</li>
+          </ul>
+          <div className={styles.price}>Free</div>
+          <Link className={`${styles.btn} ${styles.btnPrimary}`} href="/dashboard">Convert now</Link>
+        </div>
+
+        <div className={styles.tier}>
+          <h2>Registered</h2>
+          <p className={styles.muted}>Registration is free</p>
+          <ul>
+            <li>5 pages every 24 hours</li>
+          </ul>
+          <div className={styles.price}>Free</div>
+          <Link className={`${styles.btn} ${styles.btnPrimary}`} href="/login">Create account</Link>
+        </div>
+
+        <div className={styles.tier}>
+          <h2>Subscribe</h2>
+          <p className={styles.muted}>Convert more documents with higher limits</p>
+          <ul>
+            <li>Starter / Professional / Business plans</li>
+          </ul>
+          <div className={styles.price}>From $15 / month</div>
+          <Link className={`${styles.btn} ${styles.btnGhost}`} href="/pricing">See plans</Link>
+        </div>
+      </section>
+
+      {/* NEED MORE */}
+      <section className={styles.contact}>
+        <h2>Need more?</h2>
+        <p>We can build bespoke processing for other document formats and custom workflows.</p>
+        <Link className={`${styles.btn} ${styles.btnPrimary}`} href="/contact">Contact us</Link>
+      </section>
+
+      {/* FOOTER */}
+      <footer className={styles.footer}>
+        <nav className={styles.links}>
+          <Link href="/api-docs">API Docs</Link>
+          <Link href="/about">About</Link>
+          <Link href="/terms">Terms</Link>
+          <Link href="/privacy">Privacy</Link>
+          <Link href="/blog">Blog</Link>
+        </nav>
+        <div className={styles.copy}>© {new Date().getFullYear()} Smart Statement</div>
+      </footer>
+    </main>
+  );
 }
