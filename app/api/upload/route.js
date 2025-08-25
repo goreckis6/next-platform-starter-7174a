@@ -1,7 +1,7 @@
 // app/api/upload/route.js
-import { put } from "@netlify/blobs";
+// 👇 WAŻNE: używamy wersji node
+import { put } from "@netlify/blobs/node";
 
-// Stabilniejsze dla uploadów niż edge
 export const runtime = "nodejs";
 
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
@@ -29,12 +29,11 @@ export async function POST(request) {
       return json({ error: "No file provided." }, 400);
     }
 
-    // Walidacja typu
     if (!isPdfFile(file, nameRaw)) {
       return json({ error: "Only PDF files are allowed." }, 400);
     }
 
-    // Rozmiar (niektóre środowiska mogą nie podać file.size)
+    // Rozmiar (niektóre środowiska nie podają file.size)
     let size = Number.isFinite(file.size) ? file.size : undefined;
     if (size === undefined) {
       const buf = await file.arrayBuffer();
@@ -45,21 +44,20 @@ export async function POST(request) {
       return json({ error: "File too large. Max 5 MB." }, 413);
     }
 
-    // Prosta normalizacja nazwy (bez znaków problematycznych)
     const safeName = String(nameRaw).replace(/[^\w.\-()+\s]/g, "_");
 
-    // Zapis do Netlify Blobs z publicznym dostępem (zwróci URL)
+    // 👇 zapis do Netlify Blobs
     const keyBase = `uploads/${Date.now()}-${safeName}`;
     const { key, url } = await put(keyBase, file, {
       contentType: file.type || "application/pdf",
       addRandomSuffix: true,
-      access: "public",
+      access: "public", // publiczny link
     });
 
     return json({
       ok: true,
       key,
-      url, // publiczny link
+      url, // tu masz publiczny link do pliku
       filename: safeName,
       size,
       contentType: file.type || "application/pdf",
