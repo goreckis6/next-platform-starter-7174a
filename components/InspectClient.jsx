@@ -2,33 +2,28 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
-import workerSrc from "pdfjs-dist/build/pdf.worker.mjs?url";
-GlobalWorkerOptions.workerSrc = workerSrc;
+import { getDocument } from "pdfjs-dist";
 
-
-// Narzędzia/typy zaznaczeń
+// Typy narzędzi
 const Tool = {
   TABLE: "table",
   COLUMN: "column",
   ROW: "row",
 };
 
-// Palety kolorów dla typów (cyklicznie)
+// Kolory per typ (rotowane)
 const COLORS = {
-  table: ["#2563eb", "#1d4ed8", "#3b82f6"], // niebieskie odcienie
-  column: ["#16a34a", "#22c55e", "#15803d"], // zielone
-  row: ["#d97706", "#f59e0b", "#b45309"], // pomarańczowe
+  table: ["#2563eb", "#1d4ed8", "#3b82f6"],
+  column: ["#16a34a", "#22c55e", "#15803d"],
+  row: ["#d97706", "#f59e0b", "#b45309"],
 };
 
-// UI pomocnicze
+// Utils
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
-
-// Konwersja do współrzędnych znormalizowanych (0..1) i z powrotem (px)
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// render uchwytów
+// Uchywt do resize/move
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -45,14 +40,7 @@ const HandleDots = ({ r, active, onMouseDown }) =>
         <div
           key={key}
           className="absolute -translate-x-1/2 -translate-y-1/2 bg-white border border-gray-700"
-          style={{
-            left: x,
-            top: y,
-            width: 10,
-            height: 10,
-            borderRadius: 6,
-            cursor,
-          }}
+          style={{ left: x, top: y, width: 10, height: 10, borderRadius: 6, cursor }}
           onMouseDown={(e) => onMouseDown(e, key)}
           title="Drag to resize"
         />
@@ -70,22 +58,37 @@ export default function InspectClient({ pdfUrl, uuid }) {
   const [scale, setScale] = useState(1.25);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
 
-  // Zaznaczenia per strona:
-  // selections[page] = [{ type: 'table'|'column'|'row', color: '#rrggbb', rect: {x,y,w,h} w normie }]
+  // selections[page] = [{ type, color, rect (norm) }]
   const [selections, setSelections] = useState({});
-
-  // aktywne narzędzie
   const [tool, setTool] = useState(Tool.TABLE);
-
-  // liczniki kolorów (cykl po palecie)
   const colorIndexRef = useRef({ table: 0, column: 0, row: 0 });
 
-  // rysowany prostokąt (draft, w px)
   const [draft, setDraft] = useState(null);
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [dragging, setDragging] = useState(null); // {mode: 'move'|'resize', handle, startMouse:{x,y}, startRect:{x,y,w,h}}
+  const [dragging, setDragging] = useState(null);
+  const [converting, setConverting] = useState(false);
 
-  // ===== PDF ładowanie =====
+  // ⬇️ PDF.js worker – ustaw TYLKO w przeglądarce
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (typeof window === "undefined") return; // SSR guard
+      try {
+        const pdfjs = await import("pdfjs-dist");
+        const worker = await import("pdfjs-dist/build/pdf.worker.mjs?url");
+        if (mounted && worker?.default) {
+          pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+        }
+      } catch (e) {
+        console.error("[pdfjs] worker init failed:", e);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // Ładowanie PDF
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -116,7 +119,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
     renderPage().catch(console.error);
   }, [renderPage]);
 
-  // ===== helpers dla aktualnej strony =====
+  // Helpers – aktualna strona
   const current = selections[pageNum] || [];
   const setCurrent = (updater) =>
     setSelections((prev) => {
@@ -125,7 +128,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
       return { ...prev, [pageNum]: next };
     });
 
-  // ===== Toolbar =====
+  // Toolbar actions
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
   const prevPage = () => {
@@ -137,7 +140,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
     setPageNum((n) => Math.min(pageCount, n + 1));
   };
 
-  // ===== Kolor dla nowego zaznaczenia wg narzędzia =====
+  // Kolor dla nowego zaznaczenia wg narzędzia
   const nextColorFor = (t) => {
     const list = COLORS[t];
     const i = colorIndexRef.current[t] % list.length;
@@ -145,14 +148,13 @@ export default function InspectClient({ pdfUrl, uuid }) {
     return list[i];
   };
 
-  // ===== rysowanie zaznaczenia =====
+  // Rysowanie/edycja
   const onMouseDown = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
     const sx = clamp(e.clientX - rect.left, 0, viewport.width);
     const sy = clamp(e.clientY - rect.top, 0, viewport.height);
 
-    // klik na istniejącym? — ustaw aktywne i przygotuj drag
     const hitIdx = hitTestBox(sx, sy);
     if (hitIdx >= 0) {
       setActiveIndex(hitIdx);
@@ -166,7 +168,6 @@ export default function InspectClient({ pdfUrl, uuid }) {
       return;
     }
 
-    // start nowego (z aktualnym narzędziem)
     setActiveIndex(-1);
     setDraft({ x: sx, y: sy, w: 0, h: 0, type: tool, color: nextColorFor(tool) });
   };
@@ -245,18 +246,12 @@ export default function InspectClient({ pdfUrl, uuid }) {
     }
     if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
-      setCurrent((prev) => {
-        // dla TABLE możesz chcieć 1 sztukę na stronę — wtedy odfiltruj stare TABLE
-        // const rest = prev.filter((s) => s.type !== Tool.TABLE);
-        // return [...rest, { type: draft.type, color: draft.color, rect: norm }];
-        return [...prev, { type: draft.type, color: draft.color, rect: norm }];
-      });
-      setActiveIndex(current.length); // nowy indeks
+      setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
+      setActiveIndex(current.length);
     }
     setDraft(null);
   };
 
-  // ===== hit test =====
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
   const hitTestBox = (x, y) => {
     for (let i = current.length - 1; i >= 0; i--) {
@@ -268,12 +263,12 @@ export default function InspectClient({ pdfUrl, uuid }) {
   const hitTestHandle = (x, y, idx) => {
     const r = pxFromNorm(current[idx].rect);
     const size = 8;
-    const inPt = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
+    const near = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
 
-    if (inPt(r.x, r.y)) return "tl";
-    if (inPt(r.x + r.w, r.y)) return "tr";
-    if (inPt(r.x, r.y + r.h)) return "bl";
-    if (inPt(r.x + r.w, r.y + r.h)) return "br";
+    if (near(r.x, r.y)) return "tl";
+    if (near(r.x + r.w, r.y)) return "tr";
+    if (near(r.x, r.y + r.h)) return "bl";
+    if (near(r.x + r.w, r.y + r.h)) return "br";
 
     if (Math.abs(x - r.x) <= size && y >= r.y && y <= r.y + r.h) return "l";
     if (Math.abs(x - (r.x + r.w)) <= size && y >= r.y && y <= r.y + r.h) return "r";
@@ -291,7 +286,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
     setActiveIndex(hitTestBox(x, y));
   };
 
-  // Klawiatura: Delete, skróty 1/2/3, zoom/prev/next
+  // Klawiatura: Delete, 1/2/3, zoom/prev/next
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -312,7 +307,49 @@ export default function InspectClient({ pdfUrl, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // ===== UI =====
+  // Convert → CSV (pobieranie)
+  const handleConvert = async () => {
+    try {
+      setConverting(true);
+      const payloadSelections = Object.fromEntries(
+        Object.entries(selections).map(([page, arr]) => [
+          page,
+          arr.map(({ type, rect }) => ({ type, rect })),
+        ])
+      );
+
+      const res = await fetch("/api/convert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uuid, selections: payloadSelections }),
+      });
+
+      if (!res.ok) {
+        let msg = `Conversion failed (status ${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.error) msg = j.error;
+        } catch {}
+        alert(msg);
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `converted-${uuid || "file"}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(e?.message || "Conversion failed.");
+    } finally {
+      setConverting(false);
+    }
+  };
+
   return (
     <div className="w-full">
       {/* Toolbar */}
@@ -360,11 +397,25 @@ export default function InspectClient({ pdfUrl, uuid }) {
           [&gt;] Next Page
         </button>
 
-        {/* Legendka kolorów */}
+        {/* Legendka */}
         <div className="ml-auto flex items-center gap-3 text-sm">
           <Legend label="Table" color={COLORS.table[0]} />
           <Legend label="Column" color={COLORS.column[0]} />
           <Legend label="Row" color={COLORS.row[0]} />
+        </div>
+
+        {/* Convert */}
+        <div>
+          <button
+            onClick={handleConvert}
+            disabled={converting || !uuid}
+            className={`ml-2 px-4 py-2 rounded-md text-white font-semibold transition ${
+              converting ? "bg-blue-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"
+            }`}
+            title="Convert selections to CSV"
+          >
+            {converting ? "Converting…" : "Convert"}
+          </button>
         </div>
       </div>
 
@@ -396,7 +447,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
                   height: r.h,
                   border: `2px solid ${s.color}`,
                   boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
-                  background: `${s.color}1a`, // ~10% fill
+                  background: `${s.color}1a`,
                 }}
               >
                 <HandleDots
@@ -415,7 +466,6 @@ export default function InspectClient({ pdfUrl, uuid }) {
                     });
                   }}
                 />
-                {/* etykieta typu w rogu */}
                 <div
                   className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br"
                   style={{ left: 0, top: 0, color: "#fff", background: s.color }}
@@ -426,7 +476,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
             );
           })}
 
-        {/* Nowo rysowany prostokąt */}
+        {/* Draft */}
         {draft && (
           <div
             className="absolute border-2 border-dashed"
