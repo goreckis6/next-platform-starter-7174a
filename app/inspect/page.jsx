@@ -1,45 +1,35 @@
 // app/inspect/page.jsx
-"use client";
+export const dynamic = "force-dynamic";   // nie prerenderuj w buildzie
+export const revalidate = 0;              // oraz bez cache
 
-import { useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Cog6ToothIcon, MagnifyingGlassIcon } from "@heroicons/react/24/outline";
 
-export default function InspectPage() {
-  const search = useSearchParams();
-  const uuid = search.get("uuid") || "";
-  const message = search.get("message") || "";
-  const env = search.get("env") || "prod";
+export default async function InspectPage({ searchParams }) {
+  const uuid = searchParams?.uuid || "";
+  const message = searchParams?.message || "";
+  const env = searchParams?.env || "prod";
 
-  const [meta, setMeta] = useState(null);
-  const [err, setErr] = useState("");
+  let meta = null;
+  let err = "";
 
-  useEffect(() => {
-    let ignore = false;
-    async function load() {
-      setErr("");
-      setMeta(null);
-      if (!uuid) {
-        setErr("Missing uuid.");
-        return;
+  if (!uuid) {
+    err = "Missing uuid.";
+  } else {
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_SITE_URL || ""}/api/inspect?uuid=${encodeURIComponent(uuid)}`,
+        { cache: "no-store" }
+      );
+      const data = await res.json();
+      if (res.ok && data?.ok) {
+        meta = data;
+      } else {
+        err = data?.error || "Failed to load file metadata.";
       }
-      try {
-        const res = await fetch(`/api/inspect?uuid=${encodeURIComponent(uuid)}`);
-        const data = await res.json();
-        if (!ignore) {
-          if (res.ok && data?.ok) setMeta(data);
-          else setErr(data?.error || "Failed to load file metadata.");
-        }
-      } catch (e) {
-        if (!ignore) setErr("Network error.");
-      }
+    } catch {
+      err = "Network error.";
     }
-    load();
-    return () => {
-      ignore = true;
-    };
-  }, [uuid]);
+  }
 
   return (
     <main className="max-w-5xl mx-auto px-6 sm:px-12 py-10">
@@ -51,13 +41,7 @@ export default function InspectPage() {
         </div>
       )}
 
-      {!uuid && (
-        <div className="text-red-600">Missing <code>uuid</code> in query.</div>
-      )}
-
-      {err && (
-        <div className="text-red-600 mb-6">{err}</div>
-      )}
+      {err && <div className="text-red-600 mb-6">{err}</div>}
 
       {meta && (
         <div className="rounded-lg border border-gray-300 p-6 bg-white">
@@ -70,32 +54,28 @@ export default function InspectPage() {
             <div className="text-sm text-gray-600">File</div>
             <div className="font-medium">{meta.filename}</div>
             {typeof meta.size === "number" && (
-              <div className="text-sm text-gray-600">{Math.round(meta.size / 1024)} KB</div>
+              <div className="text-sm text-gray-600">
+                {Math.round(meta.size / 1024)} KB
+              </div>
             )}
           </div>
 
           <div className="flex flex-wrap gap-3">
-            {/* Convert – prześlij uuid/key do Twojego flow konwersji */}
             <Link
               href={`/dashboard?uuid=${encodeURIComponent(meta.uuid)}&key=${encodeURIComponent(meta.key)}`}
               className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-white text-sm font-semibold hover:bg-blue-700 transition"
             >
-              <Cog6ToothIcon className="h-5 w-5" />
               Convert
             </Link>
 
-            {/* Inspect – jesteś na tej stronie; zostawiam jako disabled/ghost */}
             <button
               type="button"
               className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-4 py-2 text-gray-900 text-sm font-semibold cursor-default"
               disabled
-              title="You are on the Inspect page"
             >
-              <MagnifyingGlassIcon className="h-5 w-5" />
               Inspect
             </button>
 
-            {/* Podgląd PDF jeśli masz /api/view */}
             {meta.viewUrl && (
               <a
                 href={meta.viewUrl}
