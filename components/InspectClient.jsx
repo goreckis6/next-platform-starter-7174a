@@ -1,7 +1,7 @@
 // components/InspectClient.jsx
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 
 // Typy narzędzi
 const Tool = {
@@ -70,8 +70,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [draft, setDraft] = useState(null);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
-  const [converting, setConverting] = useState(false);
-  const [extracting, setExtracting] = useState(false);
+
+  // Wyniki automatycznego wyciągania tekstu: values[page] = [{index,type,text}]
+  const [values, setValues] = useState({}); // { [page: number]: Array<{index:number,type:string,text:string}> }
 
   // 1) Inicjalizacja PDF.js — tylko w przeglądarce, z fallbackiem workera
   useEffect(() => {
@@ -123,6 +124,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       setError(null);
       setPdfDoc(null);
       setTextCache({});
+      setValues({});
 
       try {
         const params = pdfData ? { data: pdfData } : { url: pdfUrl };
@@ -317,8 +319,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   const onMouseUp = () => {
-    if (dragging) setDragging(null);
-    else if (draft && draft.w >= 6 && draft.h >= 6) {
+    if (dragging) {
+      setDragging(null);
+      return;
+    }
+    if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
       setActiveIndex(current.length);
@@ -355,100 +360,51 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // Convert → CSV (współrzędne)
-  const handleConvert = async () => {
-    try {
-      setConverting(true);
-      const payloadSelections = Object.fromEntries(
-        Object.entries(selections).map(([page, arr]) => [
-          page,
-          arr.map(({ type, rect }) => ({ type, rect })),
-        ])
-      );
+  // ====== AUTO-EXTRACT: przelicz wartości, kiedy zmieniają się selekcje/tekst/viewport ======
+  const extractTextsForPage = useCallback(
+    (page) => {
+      const pageSelections = selections[page] || [];
+      const items = textCache[page];
+      if (!items || viewport.width === 0 || viewport.height === 0) return [];
 
-      const res = await fetch("/api/convert", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uuid, selections: payloadSelections }),
+      return pageSelections.map((sel, i) => {
+        const r = fromNorm(sel.rect, viewport.width, viewport.height);
+        const texts = items
+          .map((it) => {
+            // transform: [a,b,c,d,e,f]  |  e=tx (x), f=ty (baseline y)
+            const [a, b, c, d, e, f] = it.transform || [];
+            const w = it.width || 0;
+            const h = it.height || 0;
+            const x = e ?? 0;
+            const y = (f ?? 0) - h; // górny lewy róg
+            const inside =
+              x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
+            return inside ? it.str : null;
+          })
+          .filter(Boolean);
+
+        return { index: i, type: sel.type, text: texts.join(" ") };
       });
+    },
+    [selections, textCache, viewport.width, viewport.height]
+  );
 
-      if (!res.ok) {
-        let msg = `Conversion failed (status ${res.status})`;
-        try {
-          const j = await res.json();
-          if (j?.error) msg = j.error;
-        } catch {}
-        alert(msg);
-        return;
+  // Liczymy wartości dla bieżącej strony + każdej, której cache tekstu już mamy
+  useEffect(() => {
+    if (!pdfDoc) return;
+    const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
+    if (pagesWithText.length === 0) return;
+
+    setValues((prev) => {
+      const next = { ...prev };
+      for (const p of pagesWithText) {
+        next[p] = extractTextsForPage(p);
       }
+      return next;
+    });
+  }, [selections, textCache, viewport.width, viewport.height, pdfDoc, extractTextsForPage]);
 
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `converted-${uuid || "file"}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      alert(e?.message || "Conversion failed.");
-    } finally {
-      setConverting(false);
-    }
-  };
-
-  // Extract → CSV (tekst z obszarów)
-  const handleExtractText = async () => {
-    try {
-      setExtracting(true);
-      const rows = [["page", "index", "type", "text"]];
-
-      for (const [pageStr, arr] of Object.entries(selections)) {
-        const page = parseInt(pageStr, 10);
-        const items = textCache[page];
-        if (!items) continue; // strona nie była jeszcze renderowana → brak cache
-
-        arr.forEach((sel, i) => {
-          const r = fromNorm(sel.rect, viewport.width, viewport.height);
-          const texts = items
-            .map((it) => {
-              // transform: [a,b,c,d,e,f]  |  e=tx (x), f=ty (baseline y)
-              const [a, b, c, d, e, f] = it.transform || [];
-              const w = it.width || 0;
-              const h = it.height || 0;
-              const x = e ?? 0;
-              const y = (f ?? 0) - h; // górny lewy róg
-              const inside =
-                x >= r.x &&
-                y >= r.y &&
-                x + w <= r.x + r.w &&
-                y + h <= r.y + r.h;
-              return inside ? it.str : null;
-            })
-            .filter(Boolean);
-
-          rows.push([page, i, sel.type, texts.join(" ")]);
-        });
-      }
-
-      const csv = rows
-        .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-        .join("\n"); // <— ważne: jedna linia, \n w stringu
-
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `extracted-${uuid || "file"}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } finally {
-      setExtracting(false);
-    }
-  };
+  const currentValues = values[pageNum] || [];
 
   return (
     <div className="w-full">
@@ -493,109 +449,117 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           <Legend label="Column" color={COLORS.column[0]} />
           <Legend label="Row" color={COLORS.row[0]} />
         </div>
-
-        {/* Akcje */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleExtractText}
-            disabled={extracting}
-            className={`px-4 py-2 rounded-md text-white font-semibold ${extracting ? "bg-green-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"}`}
-            title="Extract selected text to CSV"
-          >
-            {extracting ? "Extracting…" : "Extract Text"}
-          </button>
-          <button
-            onClick={handleConvert}
-            disabled={converting || !uuid}
-            className={`px-4 py-2 rounded-md text-white font-semibold ${converting ? "bg-blue-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}
-            title="Convert selections to CSV (coords)"
-          >
-            {converting ? "Converting…" : "Convert (coords)"}
-          </button>
-        </div>
       </div>
 
-      {/* Canvas + overlay */}
-      <div
-        className="relative inline-block select-none"
-        ref={containerRef}
-        style={{ lineHeight: 0 }}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
-        onClick={onClick}
-      >
-        <canvas ref={canvasRef} className="shadow border" />
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6">
+        {/* Canvas + overlay */}
+        <div
+          className="relative inline-block select-none"
+          ref={containerRef}
+          style={{ lineHeight: 0 }}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          onClick={onClick}
+        >
+          <canvas ref={canvasRef} className="shadow border" />
 
-        {/* Error overlay */}
-        {error && (
-          <div className="absolute left-0 top-0 w-full p-3 bg-red-50 text-red-800 text-sm border border-red-200">
-            Nie udało się wczytać PDF: <span className="font-mono">{String(error)}</span>
-          </div>
-        )}
+          {/* Error overlay */}
+          {error && (
+            <div className="absolute left-0 top-0 w-full p-3 bg-red-50 text-red-800 text-sm border border-red-200">
+              Nie udało się wczytać PDF: <span className="font-mono">{String(error)}</span>
+            </div>
+          )}
 
-        {/* Istniejące zaznaczenia */}
-        {viewport.width > 0 &&
-          current.map((s, i) => {
-            const r = fromNorm(s.rect, viewport.width, viewport.height);
-            const active = i === activeIndex;
-            return (
-              <div
-                key={i}
-                className="absolute"
-                style={{
-                  left: r.x,
-                  top: r.y,
-                  width: r.w,
-                  height: r.h,
-                  border: `2px solid ${s.color}`,
-                  boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
-                  background: `${s.color}1a`,
-                }}
-              >
-                <HandleDots
-                  r={r}
-                  active={active}
-                  onMouseDown={(e, handle) => {
-                    e.stopPropagation();
-                    const rect = containerRef.current.getBoundingClientRect();
-                    const x = clamp(e.clientX - rect.left, 0, viewport.width);
-                    const y = clamp(e.clientY - rect.top, 0, viewport.height);
-                    setDragging({
-                      mode: "resize",
-                      handle,
-                      startMouse: { x, y },
-                      startRect: { ...r },
-                    });
-                  }}
-                />
+          {/* Istniejące zaznaczenia */}
+          {viewport.width > 0 &&
+            current.map((s, i) => {
+              const r = fromNorm(s.rect, viewport.width, viewport.height);
+              const active = i === activeIndex;
+              return (
                 <div
-                  className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br"
-                  style={{ left: 0, top: 0, color: "#fff", background: s.color }}
+                  key={i}
+                  className="absolute"
+                  style={{
+                    left: r.x,
+                    top: r.y,
+                    width: r.w,
+                    height: r.h,
+                    border: `2px solid ${s.color}`,
+                    boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
+                    background: `${s.color}1a`,
+                  }}
                 >
-                  {s.type.toUpperCase()}
+                  <HandleDots
+                    r={r}
+                    active={active}
+                    onMouseDown={(e, handle) => {
+                      e.stopPropagation();
+                      const rect = containerRef.current.getBoundingClientRect();
+                      const x = clamp(e.clientX - rect.left, 0, viewport.width);
+                      const y = clamp(e.clientY - rect.top, 0, viewport.height);
+                      setDragging({
+                        mode: "resize",
+                        handle,
+                        startMouse: { x, y },
+                        startRect: { ...r },
+                      });
+                    }}
+                  />
+                  <div
+                    className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br"
+                    style={{ left: 0, top: 0, color: "#fff", background: s.color }}
+                  >
+                    {s.type.toUpperCase()}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
 
-        {/* Draft */}
-        {draft && (
-          <div
-            className="absolute border-2 border-dashed"
-            style={{
-              left: draft.x,
-              top: draft.y,
-              width: draft.w,
-              height: draft.h,
-              borderColor: draft.color,
-              background: `${draft.color}14`,
-            }}
-          />
-        )}
+          {/* Draft */}
+          {draft && (
+            <div
+              className="absolute border-2 border-dashed"
+              style={{
+                left: draft.x,
+                top: draft.y,
+                width: draft.w,
+                height: draft.h,
+                borderColor: draft.color,
+                background: `${draft.color}14`,
+              }}
+            />
+          )}
+        </div>
+
+        {/* Panel wyników (auto-aktualizacja) */}
+        <div className="border rounded-lg p-3 bg-white/60">
+          <div className="font-semibold mb-2">Wyniki (strona {pageNum})</div>
+          {currentValues.length === 0 ? (
+            <div className="text-sm text-gray-500">Brak zaznaczeń na tej stronie.</div>
+          ) : (
+            <ul className="space-y-2">
+              {currentValues.map((row) => (
+                <li key={row.index} className="text-sm">
+                  <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
+                        style={{ background: chipColor(row.type) }}>
+                    {row.type}
+                  </span>
+                  <span className="align-middle break-words">{row.text || <em className="text-gray-500">—</em>}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
+}
+
+function chipColor(t) {
+  if (t === Tool.TABLE) return COLORS.table[1];
+  if (t === Tool.COLUMN) return COLORS.column[1];
+  return COLORS.row[1];
 }
 
 function Legend({ label, color }) {
