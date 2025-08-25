@@ -15,8 +15,8 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// precise rect intersection with tolerance
-const EPS = 1.5; // px tolerance
+const EPS = 1.5; // px tolerance for intersects / contains
+
 function rectsIntersect(r1, r2) {
   return !(
     r2.x > r1.x + r1.w + EPS ||
@@ -25,8 +25,24 @@ function rectsIntersect(r1, r2) {
     r2.y + r2.h < r1.y - EPS
   );
 }
+function rectContains(outer, inner) {
+  return (
+    inner.x >= outer.x - EPS &&
+    inner.y >= outer.y - EPS &&
+    inner.x + inner.w <= outer.x + outer.w + EPS &&
+    inner.y + inner.h <= outer.y + outer.h + EPS
+  );
+}
+function rectIntersection(a, b) {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w);
+  const y2 = Math.min(a.y + a.h, b.y + b.h);
+  if (x2 <= x1 || y2 <= y1) return null;
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
 
-// resize/move handles
+// Resize/move handles
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -75,10 +91,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // auto extracted values: values[page] = [{index,type,text}]
-  const [values, setValues] = useState({});
+  // computed per page: { tables: [{ rect, rows:[rect], cols:[rect], cells: string[][] }], loose: [{type,rect,text}] }
+  const [pageData, setPageData] = useState({});
 
-  // init pdf.js with worker fallbacks
+  // 1) Init pdf.js + worker
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -102,23 +118,18 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
             }
           }
         }
-        if (workerUrl) {
-          lib.GlobalWorkerOptions.workerSrc = workerUrl;
-        } else {
-          console.warn("[pdfjs] running without dedicated worker");
-        }
+        if (workerUrl) lib.GlobalWorkerOptions.workerSrc = workerUrl;
+        else console.warn("[pdfjs] running without dedicated worker");
         if (mounted) setPdfjs(lib);
       } catch (e) {
         console.error("[pdfjs] init failed:", e);
         if (mounted) setError("PDF.js init failed");
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
-  // load document from url or pdfData
+  // 2) Load doc
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -128,7 +139,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       setError(null);
       setPdfDoc(null);
       setTextCache({});
-      setValues({});
+      setPageData({});
 
       try {
         const params = pdfData ? { data: pdfData } : { url: pdfUrl };
@@ -146,12 +157,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         setPageNum(1);
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [pdfUrl, pdfData, pdfjs]);
 
-  // render page and cache text
+  // 3) Render + cache text
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -173,7 +182,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     renderPage().catch((e) => console.error("Render error:", e));
   }, [renderPage]);
 
-  // helpers for current page
+  // helpers
   const current = selections[pageNum] || [];
   const setCurrent = (updater) =>
     setSelections((prev) => {
@@ -182,17 +191,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       return { ...prev, [pageNum]: next };
     });
 
-  // toolbar actions
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
-  const prevPage = () => {
-    setActiveIndex(-1);
-    setPageNum((n) => Math.max(1, n - 1));
-  };
-  const nextPage = () => {
-    setActiveIndex(-1);
-    setPageNum((n) => Math.min(pageCount, n + 1));
-  };
+  const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
+  const nextPage = () => { setActiveIndex(-1); setPageNum((n) => Math.min(pageCount, n + 1)); };
 
   const nextColorFor = (t) => {
     const list = COLORS[t];
@@ -201,7 +203,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return list[i];
   };
 
-  // hit testing
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
 
   const hitTestBox = (x, y) => {
@@ -216,17 +217,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     const r = pxFromNorm(current[idx].rect);
     const size = 8;
     const near = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
-
     if (near(r.x, r.y)) return "tl";
     if (near(r.x + r.w, r.y)) return "tr";
     if (near(r.x, r.y + r.h)) return "bl";
     if (near(r.x + r.w, r.y + r.h)) return "br";
-
     if (Math.abs(x - r.x) <= size && y >= r.y && y <= r.y + r.h) return "l";
     if (Math.abs(x - (r.x + r.w)) <= size && y >= r.y && y <= r.y + r.h) return "r";
     if (Math.abs(y - r.y) <= size && x >= r.x && x <= r.x + r.w) return "t";
     if (Math.abs(y - (r.y + r.h)) <= size && x >= r.x && x <= r.x + r.w) return "b";
-
     return null;
   };
 
@@ -242,11 +240,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       setActiveIndex(hitIdx);
       const h = hitTestHandle(sx, sy, hitIdx);
       const r = pxFromNorm(current[hitIdx].rect);
-      if (h) {
-        setDragging({ mode: "resize", handle: h, startMouse: { x: sx, y: sy }, startRect: r });
-      } else {
-        setDragging({ mode: "move", handle: null, startMouse: { x: sx, y: sy }, startRect: r });
-      }
+      if (h) setDragging({ mode: "resize", handle: h, startMouse: { x: sx, y: sy }, startRect: r });
+      else setDragging({ mode: "move", handle: null, startMouse: { x: sx, y: sy }, startRect: r });
       return;
     }
 
@@ -278,7 +273,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       } else if (mode === "resize") {
         const r = { ...startRect };
         const minSize = 8;
-
         if (["tl", "l", "bl"].includes(handle)) {
           const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width);
           r.w = r.x + r.w - nx;
@@ -297,7 +291,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height);
           r.h = ny2 - r.y;
         }
-
         setCurrent((prev) => {
           const next = [...prev];
           next[activeIndex] = {
@@ -322,20 +315,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   const onMouseUp = () => {
-    if (dragging) {
-      setDragging(null);
-      return;
-    }
+    if (dragging) { setDragging(null); return; }
     if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
       setActiveIndex(current.length);
     }
     setDraft(null);
-  };
-
-  const onClick = () => {
-    if (!containerRef.current || dragging || draft) return;
   };
 
   // keyboard
@@ -359,127 +345,156 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // precise auto-extract with intersection and sorting
-  const extractTextsForPage = useCallback(
-    (page) => {
-      const pageSelections = selections[page] || [];
-      const items = textCache[page];
-      if (!items || viewport.width === 0 || viewport.height === 0) return [];
+  // --- TEXT BOXES UTILS ---
+  const getTextBoxesForPage = useCallback((pageNumber) => {
+    const items = textCache[pageNumber] || [];
+    return items.map((it) => {
+      const t = it.transform || [];
+      const d = t[3] ?? 0;
+      const e = t[4] ?? 0; // x
+      const f = t[5] ?? 0; // baseline y
+      const w = it.width || 0;
+      const h = Math.abs(d) || it.height || 0;
+      const x = e;
+      const y = f - h; // top-left
+      return { it, x, y, w, h };
+    });
+  }, [textCache]);
 
-      // precompute boxes for items
-      const boxes = items.map((it, idx) => {
-        const t = it.transform || [];
-        const a = t[0] ?? 0;
-        const b = t[1] ?? 0;
-        const c = t[2] ?? 0;
-        const d = t[3] ?? 0;
-        const e = t[4] ?? 0; // x
-        const f = t[5] ?? 0; // baseline y
-        const w = it.width || 0;
-        const h = Math.abs(d) || it.height || 0; // glyph box height
-        const x = e;
-        const y = f - h; // convert baseline to top-left
-        return { idx, it, x, y, w, h };
-      });
+  const collectTextInRect = useCallback((rect, boxes) => {
+    const picked = [];
+    for (const bx of boxes) if (rectsIntersect(rect, bx)) picked.push(bx);
+    picked.sort((a, b) => {
+      const dy = a.y - b.y;
+      if (Math.abs(dy) > 0.5) return dy;
+      return a.x - b.x;
+    });
+    return picked.map((bx) => bx.it.str).join(" ");
+  }, []);
 
-      return pageSelections.map((sel, i) => {
-        const r = fromNorm(sel.rect, viewport.width, viewport.height);
+  // --- BUILD TABLES FROM SELECTIONS ---
+  const buildTablesForPage = useCallback((page) => {
+    const sels = selections[page] || [];
+    if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
 
-        // collect intersecting items
-        const picked = [];
-        for (const bx of boxes) {
-          if (rectsIntersect(r, bx)) picked.push(bx);
-        }
+    const tables = [];
+    const rows = [];
+    const cols = [];
+    for (const s of sels) {
+      const r = fromNorm(s.rect, viewport.width, viewport.height);
+      if (s.type === Tool.TABLE) tables.push({ ...s, rectPx: r });
+      else if (s.type === Tool.ROW) rows.push({ ...s, rectPx: r });
+      else if (s.type === Tool.COLUMN) cols.push({ ...s, rectPx: r });
+    }
 
-        // sort by y (ascending), then x
-        picked.sort((p, q) => {
-          const dy = p.y - q.y;
-          if (Math.abs(dy) > 0.5) return dy;
-          return p.x - q.x;
-        });
+    // assign rows/cols into their parent tables (by containment)
+    const resultTables = tables.map((t) => {
+      const tRect = t.rectPx;
+      const inRows = rows.filter((r) => rectContains(tRect, r.rectPx)).sort((a, b) => a.rectPx.y - b.rectPx.y);
+      const inCols = cols.filter((c) => rectContains(tRect, c.rectPx)).sort((a, b) => a.rectPx.x - b.rectPx.x);
 
-        const text = picked.map((bx) => bx.it.str).join(" ");
+      return { table: t, rect: tRect, rows: inRows.map((r) => r.rectPx), cols: inCols.map((c) => c.rectPx) };
+    });
 
-        return { index: i, type: sel.type, text };
-      });
-    },
-    [selections, textCache, viewport.width, viewport.height]
-  );
+    // loose selections (not inside any table) -> still extract, but as one cell each
+    const loose = [];
+    const allTableRects = tables.map((t) => t.rectPx);
+    for (const s of [...rows, ...cols]) {
+      const insideAny = allTableRects.some((tr) => rectContains(tr, s.rectPx));
+      if (!insideAny) loose.push({ type: s.type, rect: s.rectPx });
+    }
 
-  // recompute values when dependencies change
+    return { tables: resultTables, loose };
+  }, [selections, viewport.width, viewport.height]);
+
+  // recompute pageData whenever selections/text/viewport change
   useEffect(() => {
     if (!pdfDoc) return;
     const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
     if (pagesWithText.length === 0) return;
 
-    setValues((prev) => {
+    setPageData((prev) => {
       const next = { ...prev };
       for (const p of pagesWithText) {
-        next[p] = extractTextsForPage(p);
+        const structure = buildTablesForPage(p);
+        const boxes = getTextBoxesForPage(p);
+
+        // for each table, compute cells text
+        const tablesOut = structure.tables.map((T, ti) => {
+          const tRect = T.rect;
+          const rowsRects = T.rows.length ? T.rows : [tRect];
+          const colsRects = T.cols.length ? T.cols : [tRect];
+
+          // build cells by intersection
+          const cells = rowsRects.map((rr) =>
+            colsRects.map((cc) => {
+              const cellRect = rectIntersection(tRect, rectIntersection(rr, cc) || rr) || tRect;
+              return collectTextInRect(cellRect, boxes);
+            })
+          );
+
+          return {
+            rect: tRect,
+            rows: rowsRects,
+            cols: colsRects,
+            cells,
+          };
+        });
+
+        // loose fragments (single cell each)
+        const looseOut = structure.loose.map((frag) => ({
+          type: frag.type,
+          rect: frag.rect,
+          text: collectTextInRect(frag.rect, boxes),
+        }));
+
+        next[p] = { tables: tablesOut, loose: looseOut };
       }
       return next;
     });
-  }, [selections, textCache, viewport.width, viewport.height, pdfDoc, extractTextsForPage]);
+  }, [selections, textCache, viewport.width, viewport.height, pdfDoc, buildTablesForPage, getTextBoxesForPage, collectTextInRect]);
 
-  const currentValues = values[pageNum] || [];
+  const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
-  // export csv using the same precise logic
+  // Export CSV exactly as built (tables + loose)
   const handleExportCSV = async () => {
     if (!pdfDoc) return;
 
-    const pages = Object.keys(selections)
-      .map((k) => parseInt(k, 10))
-      .filter((p) => (selections[p] || []).length > 0)
-      .sort((a, b) => a - b);
+    // collect pages that have any structure
+    const pages = Object.keys(pageData).map((n) => parseInt(n, 10)).filter((p) => {
+      const d = pageData[p];
+      return d && (d.tables?.length || d.loose?.length);
+    }).sort((a, b) => a - b);
 
-    const rows = [["page", "index", "type", "text"]];
-
+    const rows = [];
     for (const p of pages) {
-      const pageSelections = selections[p] || [];
-      if (pageSelections.length === 0) continue;
-
-      const page = await pdfDoc.getPage(p);
-      const vp = page.getViewport({ scale });
-
-      let items = textCache[p];
-      if (!items) {
-        const txt = await page.getTextContent();
-        items = txt.items;
-      }
-
-      // precompute boxes for that page
-      const boxes = items.map((it, idx) => {
-        const t = it.transform || [];
-        const d = t[3] ?? 0;
-        const e = t[4] ?? 0;
-        const f = t[5] ?? 0;
-        const w = it.width || 0;
-        const h = Math.abs(d) || it.height || 0;
-        const x = e;
-        const y = f - h;
-        return { idx, it, x, y, w, h };
-      });
-
-      pageSelections.forEach((sel, i) => {
-        const r = fromNorm(sel.rect, vp.width, vp.height);
-
-        const picked = [];
-        for (const bx of boxes) {
-          if (rectsIntersect(r, bx)) picked.push(bx);
-        }
-
-        picked.sort((p, q) => {
-          const dy = p.y - q.y;
-          if (Math.abs(dy) > 0.5) return dy;
-          return p.x - q.x;
+      const d = pageData[p];
+      // tables
+      d.tables.forEach((T, ti) => {
+        const maxCols = Math.max(0, ...T.cells.map((r) => r.length));
+        // header (optional) — uncomment if you want column labels:
+        // rows.push([`page:${p}`, `table:${ti}`, ...Array.from({ length: maxCols }, (_, i) => `c${i+1}`)]);
+        T.cells.forEach((r, ri) => {
+          const line = [`page:${p}`, `table:${ti}`, `row:${ri}`, ...r];
+          rows.push(line);
         });
-
-        const text = picked.map((bx) => bx.it.str).join(" ");
-        rows.push([p, i, sel.type, text]);
+        // spacer line between tables (optional)
+        rows.push([]);
       });
+      // loose fragments
+      d.loose.forEach((L, li) => {
+        rows.push([`page:${p}`, `loose:${li}`, L.type, L.text]);
+      });
+      if ((d.loose?.length || 0) > 0) rows.push([]);
     }
 
-    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+    // if nothing, put header
+    if (rows.length === 0) rows.push(["page", "table/loose", "row", "value..."]);
+
+    const csv = rows
+      .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -491,8 +506,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     URL.revokeObjectURL(url);
   };
 
+  // ---------------- UI ----------------
   return (
     <div className="w-full">
+      {/* Toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
 
@@ -503,7 +520,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         </div>
 
         <span className="mx-1" />
-
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>[+] Zoom In</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>[-] Zoom Out</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>&lt; Prev</button>
@@ -517,7 +533,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_420px] gap-6">
+        {/* Canvas */}
         <div
           className="relative inline-block select-none"
           ref={containerRef}
@@ -525,7 +542,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
-          onClick={onClick}
         >
           <canvas ref={canvasRef} className="shadow border" />
 
@@ -535,8 +551,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
             </div>
           )}
 
+          {/* Selections */}
           {viewport.width > 0 &&
-            current.map((s, i) => {
+            (selections[pageNum] || []).map((s, i) => {
               const r = fromNorm(s.rect, viewport.width, viewport.height);
               const active = i === activeIndex;
               return (
@@ -551,6 +568,19 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
                     border: `2px solid ${s.color}`,
                     boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
                     background: `${s.color}1a`,
+                  }}
+                  onMouseDown={(e) => {
+                    const rect = containerRef.current.getBoundingClientRect();
+                    const x = clamp(e.clientX - rect.left, 0, viewport.width);
+                    const y = clamp(e.clientY - rect.top, 0, viewport.height);
+                    const h = hitTestHandle(x, y, i);
+                    const rpx = { ...r };
+                    setActiveIndex(i);
+                    if (h) {
+                      setDragging({ mode: "resize", handle: h, startMouse: { x, y }, startRect: rpx });
+                    } else {
+                      setDragging({ mode: "move", handle: null, startMouse: { x, y }, startRect: rpx });
+                    }
                   }}
                 >
                   <HandleDots
@@ -571,6 +601,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
               );
             })}
 
+          {/* Draft */}
           {draft && (
             <div
               className="absolute border-2 border-dashed"
@@ -586,21 +617,47 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           )}
         </div>
 
-        <div className="border rounded-lg p-3 bg-white/60">
+        {/* Right panel: tables + loose */}
+        <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h-[80vh]">
           <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
-          {currentValues.length === 0 ? (
-            <div className="text-sm text-gray-500">Brak zaznaczen.</div>
-          ) : (
-            <ul className="space-y-2">
-              {currentValues.map((row) => (
-                <li key={row.index} className="text-sm">
-                  <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white" style={{ background: chipColor(row.type) }}>
-                    {row.type}
-                  </span>
-                  <span className="align-middle break-words">{row.text || <em className="text-gray-500">-</em>}</span>
-                </li>
-              ))}
-            </ul>
+
+          {currentPageData.tables.length === 0 && currentPageData.loose.length === 0 ? (
+            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE, a w nim ROW/COLUMN.</div>
+          ) : null}
+
+          {currentPageData.tables.map((T, ti) => (
+            <div key={ti} className="mb-4">
+              <div className="text-sm font-medium mb-1">Table #{ti + 1} — {T.rows.length} rows × {T.cols.length} cols</div>
+              <div className="overflow-auto">
+                <table className="min-w-full border text-sm">
+                  <tbody>
+                    {T.cells.map((row, ri) => (
+                      <tr key={ri}>
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="border px-2 py-1 align-top">{cell || <span className="text-gray-400">—</span>}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+
+          {currentPageData.loose.length > 0 && (
+            <>
+              <div className="text-sm font-medium mt-4 mb-1">Loose selections</div>
+              <ul className="space-y-1 text-sm">
+                {currentPageData.loose.map((L, i) => (
+                  <li key={i}>
+                    <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white" style={{ background: L.type === Tool.COLUMN ? COLORS.column[1] : COLORS.row[1] }}>
+                      {L.type}
+                    </span>
+                    {L.text || <span className="text-gray-400">—</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
       </div>
