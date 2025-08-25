@@ -39,38 +39,27 @@ export default function Page() {
         </div>
       </section>
 
-      {/* FREEMIUM TIERS */}
-      <section className={styles.tiers}>
-        <div className={styles.tier}>
-          <h2>Anonymous</h2>
-          <p className={styles.muted}>No sign-up required</p>
-          <ul>
-            <li>1 page every 24 hours</li>
-          </ul>
-          <div className={styles.price}>Free</div>
-          <Link className={`${styles.btn} ${styles.btnPrimary}`} href="/dashboard">Convert now</Link>
-        </div>
-
-        <div className={styles.tier}>
-          <h2>Registered</h2>
-          <p className={styles.muted}>Registration is free</p>
-          <ul>
-            <li>5 pages every 24 hours</li>
-          </ul>
-          <div className={styles.price}>Free</div>
-          <Link className={`${styles.btn} ${styles.btnPrimary}`} href="/login">Create account</Link>
-        </div>
-
-        <div className={styles.tier}>
-          <h2>Subscribe</h2>
-          <p className={styles.muted}>Convert more documents with higher limits</p>
-          <ul>
-            <li>Starter / Professional / Business plans</li>
-          </ul>
-          <div className={styles.price}>From $15 / month</div>
-          <Link className={`${styles.btn} ${styles.btnGhost}`} href="/pricing">See plans</Link>
-        </div>
-      </section>
+      {/* FEATURES */}
+<section className={`${styles.features} bg-white text-black`}>
+  <div className={styles.card}>
+    <h3>Secure</h3>
+    <p>
+      With years of experience in banking we comply with strict standards when handling your files.
+    </p>
+  </div>
+  <div className={styles.card}>
+    <h3>Institutional</h3>
+    <p>
+      We've provided our services to thousands of reputable financial, accounting and legal firms.
+    </p>
+  </div>
+  <div className={styles.card}>
+    <h3>Accurate</h3>
+    <p>
+      We're continually improving our algorithms. If a file doesn't convert to your expectations, email us and we'll fix it.
+    </p>
+  </div>
+</section>
 
       {/* NEED MORE */}
       <section className={styles.contact}>
