@@ -1,26 +1,18 @@
 // app/api/view/route.js
 import { getStore } from "@netlify/blobs";
-
 export const runtime = "nodejs";
 
 export async function GET(request) {
   try {
     const url = new URL(request.url);
     const key = url.searchParams.get("key");
-    if (!key) {
-      return new Response("Missing key", { status: 400 });
-    }
+    if (!key) return new Response("Missing key", { status: 400 });
 
-    const uploads = getStore("file-uploads");
-    // Pobierz jako stream; jeśli chcesz bufor: type: "arrayBuffer"
-    const blobStream = await uploads.get(key, { type: "stream" });
+    const store = getStore("file-uploads");
+    const buf = await store.get(key, { type: "arrayBuffer" });
+    if (!buf) return new Response("Not found", { status: 404 });
 
-    if (!blobStream) {
-      return new Response("Not found", { status: 404 });
-    }
-
-    // Ustaw nagłówki; możesz dodać Content-Disposition jeśli chcesz pobieranie
-    return new Response(blobStream, {
+    return new Response(buf, {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
@@ -28,6 +20,7 @@ export async function GET(request) {
       },
     });
   } catch (e) {
-    return new Response("Error fetching blob", { status: 500 });
+    console.error("[/api/view] error:", e);
+    return new Response("Internal error", { status: 500 });
   }
 }
