@@ -15,7 +15,8 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-const EPS = 1.5; // px tolerance for intersects / contains
+// mniejsza tolerancja
+const EPS = 0.5;
 
 function rectsIntersect(r1, r2) {
   return !(
@@ -23,14 +24,6 @@ function rectsIntersect(r1, r2) {
     r2.x + r2.w < r1.x - EPS ||
     r2.y > r1.y + r1.h + EPS ||
     r2.y + r2.h < r1.y - EPS
-  );
-}
-function rectContains(outer, inner) {
-  return (
-    inner.x >= outer.x - EPS &&
-    inner.y >= outer.y - EPS &&
-    inner.x + inner.w <= outer.x + outer.w + EPS &&
-    inner.y + inner.h <= outer.y + outer.h + EPS
   );
 }
 function rectIntersection(a, b) {
@@ -41,8 +34,11 @@ function rectIntersection(a, b) {
   if (x2 <= x1 || y2 <= y1) return null;
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
+function pointInRect(px, py, r) {
+  return px >= r.x - EPS && px <= r.x + r.w + EPS && py >= r.y - EPS && py <= r.y + r.h + EPS;
+}
 
-// Resize/move handles
+// uchwyty
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -71,18 +67,18 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
-  const [pdfjs, setPdfjs] = useState(null);
+  const [pdfjs, setPdfjs] = useState(null);          // cały moduł pdfjs-dist
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(1);
   const [scale, setScale] = useState(1.25);
-  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [viewport, setViewport] = useState({ width: 0, height: 0, transform: [1,0,0,1,0,0] });
   const [error, setError] = useState(null);
 
-  // text cache per page: page -> items
+  // cache: { [page]: { items, viewportTransform } }
   const [textCache, setTextCache] = useState({});
 
-  // selections[page] = [{ type, color, rect (normalized) }]
+  // selections[page] = [{ type, color, rect }]
   const [selections, setSelections] = useState({});
   const [tool, setTool] = useState(Tool.TABLE);
   const colorIndexRef = useRef({ table: 0, column: 0, row: 0 });
@@ -91,10 +87,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // computed per page: { tables: [{ rect, rows:[rect], cols:[rect], cells: string[][] }], loose: [{type,rect,text}] }
+  // per page: { tables: [...], loose: [...] }
   const [pageData, setPageData] = useState({});
 
-  // 1) Init pdf.js + worker
+  // init pdf.js + worker
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -113,23 +109,20 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
             try {
               const w = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
               workerUrl = w?.default;
-            } catch (e3) {
-              console.error("[pdfjs] no worker url variant worked", e3);
-            }
+            } catch {}
           }
         }
         if (workerUrl) lib.GlobalWorkerOptions.workerSrc = workerUrl;
-        else console.warn("[pdfjs] running without dedicated worker");
         if (mounted) setPdfjs(lib);
       } catch (e) {
-        console.error("[pdfjs] init failed:", e);
+        console.error(e);
         if (mounted) setError("PDF.js init failed");
       }
     })();
     return () => { mounted = false; };
   }, []);
 
-  // 2) Load doc
+  // load doc
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -149,9 +142,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         setPageCount(doc.numPages);
         setPageNum(1);
       } catch (err) {
-        console.error("PDF load error:", err);
+        console.error(err);
         if (!mounted) return;
-        setError(err?.message || "Unknown PDF load error");
+        setError(err?.message || "PDF load error");
         setPdfDoc(null);
         setPageCount(1);
         setPageNum(1);
@@ -160,21 +153,27 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => { mounted = false; };
   }, [pdfUrl, pdfData, pdfjs]);
 
-  // 3) Render + cache text
+  // render + cache text with viewport transform
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
+
     const page = await pdfDoc.getPage(pageNum);
     const vp = page.getViewport({ scale });
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
     canvas.width = vp.width;
     canvas.height = vp.height;
-    setViewport({ width: vp.width, height: vp.height });
+
+    setViewport({ width: vp.width, height: vp.height, transform: vp.transform });
+
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
     if (!textCache[pageNum]) {
-      const txt = await page.getTextContent();
-      setTextCache((prev) => ({ ...prev, [pageNum]: txt.items }));
+      const txt = await page.getTextContent({ includeMarkedContent: true, disableCombineTextItems: false });
+      setTextCache((prev) => ({
+        ...prev,
+        [pageNum]: { items: txt.items, vpTransform: vp.transform }
+      }));
     }
   }, [pdfDoc, pageNum, scale, textCache]);
 
@@ -182,7 +181,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     renderPage().catch((e) => console.error("Render error:", e));
   }, [renderPage]);
 
-  // helpers
+  // helpers – current selections
   const current = selections[pageNum] || [];
   const setCurrent = (updater) =>
     setSelections((prev) => {
@@ -191,6 +190,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       return { ...prev, [pageNum]: next };
     });
 
+  // toolbar
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
   const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
@@ -203,8 +203,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return list[i];
   };
 
+  // hit tests
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
-
   const hitTestBox = (x, y) => {
     for (let i = current.length - 1; i >= 0; i--) {
       const r = pxFromNorm(current[i].rect);
@@ -212,7 +212,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     }
     return -1;
   };
-
   const hitTestHandle = (x, y, idx) => {
     const r = pxFromNorm(current[idx].rect);
     const size = 8;
@@ -228,7 +227,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return null;
   };
 
-  // mouse events
+  // mouse
   const onMouseDown = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -275,8 +274,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         const minSize = 8;
         if (["tl", "l", "bl"].includes(handle)) {
           const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width);
-          r.w = r.x + r.w - nx;
-          r.x = nx;
+          r.w = r.x + r.w - nx; r.x = nx;
         }
         if (["tr", "r", "br"].includes(handle)) {
           const nx2 = clamp(Math.max(x, r.x + minSize), 0, viewport.width);
@@ -284,8 +282,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         }
         if (["tl", "t", "tr"].includes(handle)) {
           const ny = clamp(Math.min(y, r.y + r.h - minSize), 0, viewport.height);
-          r.h = r.y + r.h - ny;
-          r.y = ny;
+          r.h = r.y + r.h - ny; r.y = ny;
         }
         if (["bl", "b", "br"].includes(handle)) {
           const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height);
@@ -293,10 +290,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         }
         setCurrent((prev) => {
           const next = [...prev];
-          next[activeIndex] = {
-            ...next[activeIndex],
-            rect: toNorm(r.x, r.y, r.w, r.h, viewport.width, viewport.height),
-          };
+          next[activeIndex] = { ...next[activeIndex], rect: toNorm(r.x, r.y, r.w, r.h, viewport.width, viewport.height) };
           return next;
         });
       }
@@ -345,34 +339,39 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // --- TEXT BOXES UTILS ---
+  // ----- PRECYZYJNE BBOXY TEKSTU W KOORDYNATACH VIEWPORTU -----
   const getTextBoxesForPage = useCallback((pageNumber) => {
-    const items = textCache[pageNumber] || [];
+    const entry = textCache[pageNumber];
+    if (!entry || !pdfjs) return [];
+    const { items, vpTransform } = entry;
+    const Util = pdfjs.Util;
+
     return items.map((it) => {
-      const t = it.transform || [];
-      const d = t[3] ?? 0;
-      const e = t[4] ?? 0; // x
-      const f = t[5] ?? 0; // baseline y
-      const w = it.width || 0;
-      const h = Math.abs(d) || it.height || 0;
-      const x = e;
-      const y = f - h; // top-left
-      return { it, x, y, w, h };
+      // przetransformuj macierz glifu do viewportu
+      const T = Util.transform(vpTransform, it.transform || [1,0,0,1,0,0]);
+      // szerokosc z item.width * skala X (wyciagamy z macierzy viewportu)
+      // ale prościej: width w pdf.js jest w jednostkach viewportu, więc mnożenie niepotrzebne,
+      // ważna jest wysokość wynikająca z transformacji (skalowanie Y)
+      const x = T[4];
+      const yTop = T[5] - Math.abs(T[3]);   // top-left (baseline minus wysokosc)
+      const w = it.width || Math.abs(T[0]); // fallback
+      const h = Math.abs(T[3]) || (it.height ?? 0);
+      return { it, x, y: yTop, w, h };
     });
-  }, [textCache]);
+  }, [textCache, pdfjs]);
 
   const collectTextInRect = useCallback((rect, boxes) => {
     const picked = [];
     for (const bx of boxes) if (rectsIntersect(rect, bx)) picked.push(bx);
     picked.sort((a, b) => {
       const dy = a.y - b.y;
-      if (Math.abs(dy) > 0.5) return dy;
+      if (Math.abs(dy) > 0.75) return dy;
       return a.x - b.x;
     });
     return picked.map((bx) => bx.it.str).join(" ");
   }, []);
 
-  // --- BUILD TABLES FROM SELECTIONS ---
+  // ----- BUDOWA TABEL (TABLE + ROW + COLUMN) -----
   const buildTablesForPage = useCallback((page) => {
     const sels = selections[page] || [];
     if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
@@ -387,27 +386,36 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       else if (s.type === Tool.COLUMN) cols.push({ ...s, rectPx: r });
     }
 
-    // assign rows/cols into their parent tables (by containment)
     const resultTables = tables.map((t) => {
       const tRect = t.rectPx;
-      const inRows = rows.filter((r) => rectContains(tRect, r.rectPx)).sort((a, b) => a.rectPx.y - b.rectPx.y);
-      const inCols = cols.filter((c) => rectContains(tRect, c.rectPx)).sort((a, b) => a.rectPx.x - b.rectPx.x);
 
-      return { table: t, rect: tRect, rows: inRows.map((r) => r.rectPx), cols: inCols.map((c) => c.rectPx) };
+      // wliczamy tylko takie wiersze/kolumny, ktorych ŚRODEK leży w TABLE
+      const inRows = rows
+        .filter((r) => pointInRect(r.rectPx.x + r.rectPx.w / 2, r.rectPx.y + r.rectPx.h / 2, tRect))
+        .sort((a, b) => a.rectPx.y - b.rectPx.y)
+        .map((r) => r.rectPx);
+
+      const inCols = cols
+        .filter((c) => pointInRect(c.rectPx.x + c.rectPx.w / 2, c.rectPx.y + c.rectPx.h / 2, tRect))
+        .sort((a, b) => a.rectPx.x - b.rectPx.x)
+        .map((c) => c.rectPx);
+
+      return { rect: tRect, rows: inRows.length ? inRows : [tRect], cols: inCols.length ? inCols : [tRect] };
     });
 
-    // loose selections (not inside any table) -> still extract, but as one cell each
+    // loose = zaznaczenia poza TABLE (jako pojedyncze fragmenty)
     const loose = [];
-    const allTableRects = tables.map((t) => t.rectPx);
     for (const s of [...rows, ...cols]) {
-      const insideAny = allTableRects.some((tr) => rectContains(tr, s.rectPx));
-      if (!insideAny) loose.push({ type: s.type, rect: s.rectPx });
+      const centerX = s.rectPx.x + s.rectPx.w / 2;
+      const centerY = s.rectPx.y + s.rectPx.h / 2;
+      const inAnyTable = tables.some((t) => pointInRect(centerX, centerY, t.rectPx));
+      if (!inAnyTable) loose.push({ type: s.type, rect: s.rectPx });
     }
 
     return { tables: resultTables, loose };
   }, [selections, viewport.width, viewport.height]);
 
-  // recompute pageData whenever selections/text/viewport change
+  // recompute pageData
   useEffect(() => {
     if (!pdfDoc) return;
     const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
@@ -419,29 +427,23 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         const structure = buildTablesForPage(p);
         const boxes = getTextBoxesForPage(p);
 
-        // for each table, compute cells text
-        const tablesOut = structure.tables.map((T, ti) => {
-          const tRect = T.rect;
-          const rowsRects = T.rows.length ? T.rows : [tRect];
-          const colsRects = T.cols.length ? T.cols : [tRect];
+        const tablesOut = structure.tables.map((T) => {
+          const rowsRects = T.rows;
+          const colsRects = T.cols;
 
-          // build cells by intersection
           const cells = rowsRects.map((rr) =>
             colsRects.map((cc) => {
-              const cellRect = rectIntersection(tRect, rectIntersection(rr, cc) || rr) || tRect;
+              // komorka to dokladne przeciecie TABLE ∩ ROW ∩ COLUMN
+              const rc = rectIntersection(T.rect, rr);
+              const cellRect = rc ? rectIntersection(rc, cc) : null;
+              if (!cellRect) return "";
               return collectTextInRect(cellRect, boxes);
             })
           );
 
-          return {
-            rect: tRect,
-            rows: rowsRects,
-            cols: colsRects,
-            cells,
-          };
+          return { rect: T.rect, rows: rowsRects, cols: colsRects, cells };
         });
 
-        // loose fragments (single cell each)
         const looseOut = structure.loose.map((frag) => ({
           type: frag.type,
           rect: frag.rect,
@@ -456,45 +458,33 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
   const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
-  // Export CSV exactly as built (tables + loose)
+  // export CSV
   const handleExportCSV = async () => {
-    if (!pdfDoc) return;
-
-    // collect pages that have any structure
-    const pages = Object.keys(pageData).map((n) => parseInt(n, 10)).filter((p) => {
-      const d = pageData[p];
-      return d && (d.tables?.length || d.loose?.length);
-    }).sort((a, b) => a - b);
+    const pages = Object.keys(pageData)
+      .map((n) => parseInt(n, 10))
+      .filter((p) => {
+        const d = pageData[p];
+        return d && (d.tables?.length || d.loose?.length);
+      })
+      .sort((a, b) => a - b);
 
     const rows = [];
     for (const p of pages) {
       const d = pageData[p];
-      // tables
       d.tables.forEach((T, ti) => {
-        const maxCols = Math.max(0, ...T.cells.map((r) => r.length));
-        // header (optional) — uncomment if you want column labels:
-        // rows.push([`page:${p}`, `table:${ti}`, ...Array.from({ length: maxCols }, (_, i) => `c${i+1}`)]);
         T.cells.forEach((r, ri) => {
-          const line = [`page:${p}`, `table:${ti}`, `row:${ri}`, ...r];
-          rows.push(line);
+          rows.push([`page:${p}`, `table:${ti}`, `row:${ri}`, ...r]);
         });
-        // spacer line between tables (optional)
         rows.push([]);
       });
-      // loose fragments
       d.loose.forEach((L, li) => {
         rows.push([`page:${p}`, `loose:${li}`, L.type, L.text]);
       });
       if ((d.loose?.length || 0) > 0) rows.push([]);
     }
-
-    // if nothing, put header
     if (rows.length === 0) rows.push(["page", "table/loose", "row", "value..."]);
 
-    const csv = rows
-      .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-
+    const csv = rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -506,22 +496,21 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     URL.revokeObjectURL(url);
   };
 
-  // ---------------- UI ----------------
+  // UI
   return (
     <div className="w-full">
-      {/* Toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
 
         <div className="flex items-center gap-1">
-          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.TABLE ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.TABLE)} title="[1] Create Table">[1] Create Table</button>
-          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.COLUMN ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.COLUMN)} title="[2] Add Column">[2] Add Column</button>
-          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.ROW ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.ROW)} title="[3] Add Row">[3] Add Row</button>
+          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.TABLE ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.TABLE)}>[1] Create Table</button>
+          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.COLUMN ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.COLUMN)}>[2] Add Column</button>
+          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.ROW ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.ROW)}>[3] Add Row</button>
         </div>
 
         <span className="mx-1" />
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>[+] Zoom In</button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>[-] Zoom Out</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>[+] Zoom</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>[-] Zoom</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>&lt; Prev</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>Next &gt;</button>
 
@@ -529,12 +518,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           <Legend label="Table" color={COLORS.table[0]} />
           <Legend label="Column" color={COLORS.column[0]} />
           <Legend label="Row" color={COLORS.row[0]} />
-          <button onClick={handleExportCSV} className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700" title="Export values to CSV">Export CSV</button>
+          <button onClick={handleExportCSV} className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700">Export CSV</button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[auto_420px] gap-6">
-        {/* Canvas */}
         <div
           className="relative inline-block select-none"
           ref={containerRef}
@@ -551,73 +539,57 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
             </div>
           )}
 
-          {/* Selections */}
-          {viewport.width > 0 &&
-            (selections[pageNum] || []).map((s, i) => {
-              const r = fromNorm(s.rect, viewport.width, viewport.height);
-              const active = i === activeIndex;
-              return (
-                <div
-                  key={i}
-                  className="absolute"
-                  style={{
-                    left: r.x,
-                    top: r.y,
-                    width: r.w,
-                    height: r.h,
-                    border: `2px solid ${s.color}`,
-                    boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
-                    background: `${s.color}1a`,
-                  }}
-                  onMouseDown={(e) => {
+          {(selections[pageNum] || []).map((s, i) => {
+            const r = fromNorm(s.rect, viewport.width, viewport.height);
+            const active = i === activeIndex;
+            return (
+              <div
+                key={i}
+                className="absolute"
+                style={{
+                  left: r.x, top: r.y, width: r.w, height: r.h,
+                  border: `2px solid ${s.color}`,
+                  boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
+                  background: `${s.color}1a`,
+                }}
+                onMouseDown={(e) => {
+                  const rect = containerRef.current.getBoundingClientRect();
+                  const x = clamp(e.clientX - rect.left, 0, viewport.width);
+                  const y = clamp(e.clientY - rect.top, 0, viewport.height);
+                  setActiveIndex(i);
+                  const h = hitTestHandle(x, y, i);
+                  const rpx = { ...r };
+                  if (h) setDragging({ mode: "resize", handle: h, startMouse: { x, y }, startRect: rpx });
+                  else setDragging({ mode: "move", handle: null, startMouse: { x, y }, startRect: rpx });
+                }}
+              >
+                <HandleDots
+                  r={r}
+                  active={active}
+                  onMouseDown={(e, handle) => {
+                    e.stopPropagation();
                     const rect = containerRef.current.getBoundingClientRect();
                     const x = clamp(e.clientX - rect.left, 0, viewport.width);
                     const y = clamp(e.clientY - rect.top, 0, viewport.height);
-                    const h = hitTestHandle(x, y, i);
-                    const rpx = { ...r };
-                    setActiveIndex(i);
-                    if (h) {
-                      setDragging({ mode: "resize", handle: h, startMouse: { x, y }, startRect: rpx });
-                    } else {
-                      setDragging({ mode: "move", handle: null, startMouse: { x, y }, startRect: rpx });
-                    }
+                    setDragging({ mode: "resize", handle, startMouse: { x, y }, startRect: { ...r } });
                   }}
-                >
-                  <HandleDots
-                    r={r}
-                    active={active}
-                    onMouseDown={(e, handle) => {
-                      e.stopPropagation();
-                      const rect = containerRef.current.getBoundingClientRect();
-                      const x = clamp(e.clientX - rect.left, 0, viewport.width);
-                      const y = clamp(e.clientY - rect.top, 0, viewport.height);
-                      setDragging({ mode: "resize", handle, startMouse: { x, y }, startRect: { ...r } });
-                    }}
-                  />
-                  <div className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br" style={{ left: 0, top: 0, color: "#fff", background: s.color }}>
-                    {s.type.toUpperCase()}
-                  </div>
+                />
+                <div className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br" style={{ left: 0, top: 0, color: "#fff", background: s.color }}>
+                  {s.type.toUpperCase()}
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
 
-          {/* Draft */}
           {draft && (
             <div
               className="absolute border-2 border-dashed"
-              style={{
-                left: draft.x,
-                top: draft.y,
-                width: draft.w,
-                height: draft.h,
-                borderColor: draft.color,
-                background: `${draft.color}14`,
-              }}
+              style={{ left: draft.x, top: draft.y, width: draft.w, height: draft.h, borderColor: draft.color, background: `${draft.color}14` }}
             />
           )}
         </div>
 
-        {/* Right panel: tables + loose */}
+        {/* RIGHT PANEL */}
         <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h-[80vh]">
           <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
 
@@ -663,12 +635,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       </div>
     </div>
   );
-}
-
-function chipColor(t) {
-  if (t === Tool.TABLE) return COLORS.table[1];
-  if (t === Tool.COLUMN) return COLORS.column[1];
-  return COLORS.row[1];
 }
 
 function Legend({ label, color }) {
