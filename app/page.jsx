@@ -1,105 +1,61 @@
 import Link from "next/link";
 import DropZone from "../components/DropZone";
+import {
+  ShieldCheckIcon,
+  BuildingOffice2Icon,
+  CheckBadgeIcon,
+} from "@heroicons/react/24/outline";
 
 export default function Page() {
   return (
-    <main className="bg-white text-black">
-      {/* HERO */}
-      <section className="text-center py-16 px-6">
-        <h1 className="text-4xl font-bold mb-4">
-          The most reliable bank statement converter
-        </h1>
-        <p className="text-lg max-w-2xl mx-auto mb-6 text-gray-800">
-          Convert PDF bank statements from thousands of banks into clean Excel (XLS) and CSV files.
-        </p>
-        <div className="flex justify-center gap-4">
-          <Link
-            className="rounded-md bg-blue-600 px-6 py-3 text-white font-semibold shadow hover:bg-blue-700 transition"
-            href="/dashboard"
-          >
-            Try for free
-          </Link>
-          <Link
-            className="rounded-md bg-gray-200 px-6 py-3 text-black font-semibold hover:bg-gray-300 transition"
-            href="/pricing"
-          >
-            See pricing
-          </Link>
-        </div>
-      </section>
-
-      {/* DROPZONE */}
-      <section className="max-w-4xl mx-auto mb-16">
+    <main className="flex flex-col gap-16">
+      {/* Dropzone */}
+      <section>
         <DropZone />
       </section>
 
-      {/* FREEMIUM TIERS */}
-      <section className="bg-white py-16 px-6">
-        <div className="grid gap-8 md:grid-cols-3 max-w-6xl mx-auto">
-          <div className="p-6 border rounded-lg text-center shadow-sm bg-white">
-            <h2 className="text-2xl font-bold mb-2">Anonymous</h2>
-            <p className="text-gray-700 mb-4">No sign-up required</p>
-            <ul className="mb-4">
-              <li>1 page every 24 hours</li>
-            </ul>
-            <div className="font-semibold mb-4">Free</div>
-            <Link
-              className="rounded-md bg-blue-600 px-5 py-2 text-white font-semibold hover:bg-blue-700 transition"
-              href="/dashboard"
-            >
-              Convert now
-            </Link>
-          </div>
+      {/* FEATURES */}
+      <section className="bg-white">
+        <div className="max-w-5xl mx-auto px-6 sm:px-12">
+          <div className="grid gap-8 md:grid-cols-3">
+            {/* Secure */}
+            <div className="p-6 border rounded-lg shadow-sm bg-white flex flex-col items-start">
+              <ShieldCheckIcon className="h-10 w-10 text-blue-600 mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Secure</h3>
+              <p className="text-gray-700">
+                With years of experience in banking we comply with strict
+                standards when handling your files.
+              </p>
+            </div>
 
-          <div className="p-6 border rounded-lg text-center shadow-sm bg-white">
-            <h2 className="text-2xl font-bold mb-2">Registered</h2>
-            <p className="text-gray-700 mb-4">Registration is free</p>
-            <ul className="mb-4">
-              <li>5 pages every 24 hours</li>
-            </ul>
-            <div className="font-semibold mb-4">Free</div>
-            <Link
-              className="rounded-md bg-blue-600 px-5 py-2 text-white font-semibold hover:bg-blue-700 transition"
-              href="/login"
-            >
-              Create account
-            </Link>
-          </div>
+            {/* Institutional */}
+            <div className="p-6 border rounded-lg shadow-sm bg-white flex flex-col items-start">
+              <BuildingOffice2Icon className="h-10 w-10 text-blue-600 mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Institutional</h3>
+              <p className="text-gray-700">
+                We&apos;ve provided our services to thousands of reputable
+                financial, accounting and legal firms.
+              </p>
+            </div>
 
-          <div className="p-6 border rounded-lg text-center shadow-sm bg-white">
-            <h2 className="text-2xl font-bold mb-2">Subscribe</h2>
-            <p className="text-gray-700 mb-4">
-              Convert more documents with higher limits
-            </p>
-            <ul className="mb-4">
-              <li>Starter / Professional / Business plans</li>
-            </ul>
-            <div className="font-semibold mb-4">From $15 / month</div>
-            <Link
-              className="rounded-md bg-gray-200 px-5 py-2 text-black font-semibold hover:bg-gray-300 transition"
-              href="/pricing"
-            >
-              See plans
-            </Link>
+            {/* Accurate */}
+            <div className="p-6 border rounded-lg shadow-sm bg-white flex flex-col items-start">
+              <CheckBadgeIcon className="h-10 w-10 text-blue-600 mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Accurate</h3>
+              <p className="text-gray-700">
+                We&apos;re continually improving our algorithms. If a file
+                doesn&apos;t convert to your expectations, email us and we&apos;ll
+                fix it.
+              </p>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* NEED MORE */}
-      <section className="bg-white py-16 px-6 text-center max-w-3xl mx-auto">
-        <h2 className="text-2xl font-bold mb-4">Need more?</h2>
-        <p className="mb-6 text-gray-700">
-          We can build bespoke processing for other document formats and custom workflows.
-        </p>
-        <Link
-          className="rounded-md bg-blue-600 px-6 py-3 text-white font-semibold hover:bg-blue-700 transition"
-          href="/contact"
-        >
-          Contact us
-        </Link>
+      {/* TIERS */}
+      <section>
+        {/* Anonymous / Registered / Subscribe ... */}
       </section>
-
-    
     </main>
   );
 }
