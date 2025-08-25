@@ -1,29 +1,19 @@
-```jsx
-// components/InspectClient.jsx
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-// Tool types
-const Tool = {
-  TABLE: "table",
-  COLUMN: "column",
-  ROW: "row",
-};
+const Tool = { TABLE: "table", COLUMN: "column", ROW: "row" };
 
-// Colors per tool (rotated)
 const COLORS = {
   table: ["#2563eb", "#1d4ed8", "#3b82f6"],
   column: ["#16a34a", "#22c55e", "#15803d"],
   row: ["#d97706", "#f59e0b", "#b45309"],
 };
 
-// Utils
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// Resize/move handles
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -52,7 +42,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
-  const [pdfjs, setPdfjs] = useState(null); // { getDocument, GlobalWorkerOptions }
+  const [pdfjs, setPdfjs] = useState(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(1);
@@ -60,10 +50,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [error, setError] = useState(null);
 
-  // Text cache per page: page -> items
   const [textCache, setTextCache] = useState({});
-
-  // selections[page] = [{ type, color, rect (normalized) }]
   const [selections, setSelections] = useState({});
   const [tool, setTool] = useState(Tool.TABLE);
   const colorIndexRef = useRef({ table: 0, column: 0, row: 0 });
@@ -72,14 +59,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // Auto-extracted values: values[page] = [{index,type,text}]
   const [values, setValues] = useState({});
 
-  // 1) Init PDF.js in browser with worker fallbacks
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (typeof window === "undefined") return; // SSR guard
+      if (typeof window === "undefined") return;
       try {
         const lib = await import("pdfjs-dist");
         let workerUrl;
@@ -107,19 +92,16 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         if (mounted) setPdfjs(lib);
       } catch (e) {
         console.error("[pdfjs] init failed:", e);
-        if (mounted) setError("Nie udalo sie zainicjalizowac PDF.js");
+        if (mounted) setError("PDF.js init failed");
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
-  // 2) Load document from url OR pdfData (Uint8Array)
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!pdfjs) return; // wait for PDF.js
+      if (!pdfjs) return;
       if (!pdfUrl && !pdfData) return;
 
       setError(null);
@@ -137,19 +119,15 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       } catch (err) {
         console.error("PDF load error:", err);
         if (!mounted) return;
-        const msg = err?.message || (typeof err === "string" ? err : "Unknown PDF load error");
-        setError(msg);
+        setError(err?.message || "Unknown PDF load error");
         setPdfDoc(null);
         setPageCount(1);
         setPageNum(1);
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [pdfUrl, pdfData, pdfjs]);
 
-  // 3) Render page + cache textContent
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -171,7 +149,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     renderPage().catch((e) => console.error("Render error:", e));
   }, [renderPage]);
 
-  // Current page helpers
   const current = selections[pageNum] || [];
   const setCurrent = (updater) =>
     setSelections((prev) => {
@@ -180,19 +157,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       return { ...prev, [pageNum]: next };
     });
 
-  // Toolbar actions
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
-  const prevPage = () => {
-    setActiveIndex(-1);
-    setPageNum((n) => Math.max(1, n - 1));
-  };
-  const nextPage = () => {
-    setActiveIndex(-1);
-    setPageNum((n) => Math.min(pageCount, n + 1));
-  };
+  const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
+  const nextPage = () => { setActiveIndex(-1); setPageNum((n) => Math.min(pageCount, n + 1)); };
 
-  // Color for new selection by tool
   const nextColorFor = (t) => {
     const list = COLORS[t];
     const i = colorIndexRef.current[t] % list.length;
@@ -200,7 +169,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return list[i];
   };
 
-  // Drawing / editing
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
 
   const hitTestBox = (x, y) => {
@@ -215,17 +183,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     const r = pxFromNorm(current[idx].rect);
     const size = 8;
     const near = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
-
     if (near(r.x, r.y)) return "tl";
     if (near(r.x + r.w, r.y)) return "tr";
     if (near(r.x, r.y + r.h)) return "bl";
     if (near(r.x + r.w, r.y + r.h)) return "br";
-
     if (Math.abs(x - r.x) <= size && y >= r.y && y <= r.y + r.h) return "l";
     if (Math.abs(x - (r.x + r.w)) <= size && y >= r.y && y <= r.y + r.h) return "r";
     if (Math.abs(y - r.y) <= size && x >= r.x && x <= r.x + r.w) return "t";
     if (Math.abs(y - (r.y + r.h)) <= size && x >= r.x && x <= r.x + r.w) return "b";
-
     return null;
   };
 
@@ -240,11 +205,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       setActiveIndex(hitIdx);
       const h = hitTestHandle(sx, sy, hitIdx);
       const r = pxFromNorm(current[hitIdx].rect);
-      if (h) {
-        setDragging({ mode: "resize", handle: h, startMouse: { x: sx, y: sy }, startRect: r });
-      } else {
-        setDragging({ mode: "move", handle: null, startMouse: { x: sx, y: sy }, startRect: r });
-      }
+      if (h) setDragging({ mode: "resize", handle: h, startMouse: { x: sx, y: sy }, startRect: r });
+      else setDragging({ mode: "move", handle: null, startMouse: { x: sx, y: sy }, startRect: r });
       return;
     }
 
@@ -276,7 +238,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       } else if (mode === "resize") {
         const r = { ...startRect };
         const minSize = 8;
-
         if (["tl", "l", "bl"].includes(handle)) {
           const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width);
           r.w = r.x + r.w - nx;
@@ -295,7 +256,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height);
           r.h = ny2 - r.y;
         }
-
         setCurrent((prev) => {
           const next = [...prev];
           next[activeIndex] = {
@@ -320,10 +280,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   const onMouseUp = () => {
-    if (dragging) {
-      setDragging(null);
-      return;
-    }
+    if (dragging) { setDragging(null); return; }
     if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
@@ -332,15 +289,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     setDraft(null);
   };
 
-  const onClick = (e) => {
+  const onClick = () => {
     if (!containerRef.current || dragging || draft) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = clamp(e.clientX - rect.left, 0, viewport.width);
-    const y = clamp(e.clientY - rect.top, 0, viewport.height);
-    setActiveIndex(hitTestBox(x, y));
   };
 
-  // Keyboard
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -361,56 +313,47 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // Auto extract: recompute values when selections/text/viewport change
   const extractTextsForPage = useCallback(
     (page) => {
       const pageSelections = selections[page] || [];
       const items = textCache[page];
       if (!items || viewport.width === 0 || viewport.height === 0) return [];
-
       return pageSelections.map((sel, i) => {
         const r = fromNorm(sel.rect, viewport.width, viewport.height);
         const texts = items
           .map((it) => {
-            // transform: [a,b,c,d,e,f]  with e=tx (x), f=ty (baseline y)
-            const [, , , , e, f] = it.transform || [];
+            const t = it.transform || [];
+            const e = t[4] ?? 0;
+            const f = t[5] ?? 0;
             const w = it.width || 0;
             const h = it.height || 0;
-            const x = e ?? 0;
-            const y = (f ?? 0) - h; // top-left
-            const inside =
-              x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
+            const x = e;
+            const y = f - h;
+            const inside = x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
             return inside ? it.str : null;
           })
           .filter(Boolean);
-
         return { index: i, type: sel.type, text: texts.join(" ") };
       });
     },
     [selections, textCache, viewport.width, viewport.height]
   );
 
-  // Recompute values for pages that have text cache
   useEffect(() => {
     if (!pdfDoc) return;
     const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
     if (pagesWithText.length === 0) return;
-
     setValues((prev) => {
       const next = { ...prev };
-      for (const p of pagesWithText) {
-        next[p] = extractTextsForPage(p);
-      }
+      for (const p of pagesWithText) next[p] = extractTextsForPage(p);
       return next;
     });
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, extractTextsForPage]);
 
   const currentValues = values[pageNum] || [];
 
-  // Export CSV of values (all pages with selections)
   const handleExportCSV = async () => {
     if (!pdfDoc) return;
-
     const pages = Object.keys(selections)
       .map((k) => parseInt(k, 10))
       .filter((p) => (selections[p] || []).length > 0)
@@ -425,7 +368,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       const page = await pdfDoc.getPage(p);
       const vp = page.getViewport({ scale });
 
-      // text from cache or load it
       let items = textCache[p];
       if (!items) {
         const txt = await page.getTextContent();
@@ -436,25 +378,22 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         const r = fromNorm(sel.rect, vp.width, vp.height);
         const texts = items
           .map((it) => {
-            const [, , , , e, f] = it.transform || [];
+            const t = it.transform || [];
+            const e = t[4] ?? 0;
+            const f = t[5] ?? 0;
             const w = it.width || 0;
             const h = it.height || 0;
-            const x = e ?? 0;
-            const y = (f ?? 0) - h;
-            const inside =
-              x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
+            const x = e;
+            const y = f - h;
+            const inside = x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
             return inside ? it.str : null;
           })
           .filter(Boolean);
-
         rows.push([p, i, sel.type, texts.join(" ")]);
       });
     }
 
-    const csv = rows
-      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-
+    const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -468,32 +407,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
   return (
     <div className="w-full">
-      {/* Toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
 
         <div className="flex items-center gap-1">
-          <button
-            className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.TABLE ? "bg-gray-100" : ""}`}
-            onClick={() => setTool(Tool.TABLE)}
-            title="[1] Create Table"
-          >
-            [1] Create Table
-          </button>
-          <button
-            className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.COLUMN ? "bg-gray-100" : ""}`}
-            onClick={() => setTool(Tool.COLUMN)}
-            title="[2] Add Column"
-          >
-            [2] Add Column
-          </button>
-          <button
-            className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.ROW ? "bg-gray-100" : ""}`}
-            onClick={() => setTool(Tool.ROW)}
-            title="[3] Add Row"
-          >
-            [3] Add Row
-          </button>
+          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.TABLE ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.TABLE)} title="[1] Create Table">[1] Create Table</button>
+          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.COLUMN ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.COLUMN)} title="[2] Add Column">[2] Add Column</button>
+          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.ROW ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.ROW)} title="[3] Add Row">[3] Add Row</button>
         </div>
 
         <span className="mx-1" />
@@ -503,27 +423,15 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>&lt; Prev</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>Next &gt;</button>
 
-        {/* Legend */}
-        <div className="ml-auto flex items-center gap-3 text-sm">
+        <div className="ml-auto flex items-center gap-2">
           <Legend label="Table" color={COLORS.table[0]} />
           <Legend label="Column" color={COLORS.column[0]} />
           <Legend label="Row" color={COLORS.row[0]} />
-        </div>
-
-        {/* Export CSV */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleExportCSV}
-            className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700"
-            title="Export values to CSV"
-          >
-            Export CSV
-          </button>
+          <button onClick={handleExportCSV} className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700" title="Export values to CSV">Export CSV</button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[auto_320px] gap-6">
-        {/* Canvas + overlay */}
         <div
           className="relative inline-block select-none"
           ref={containerRef}
@@ -535,14 +443,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         >
           <canvas ref={canvasRef} className="shadow border" />
 
-          {/* Error overlay */}
           {error && (
             <div className="absolute left-0 top-0 w-full p-3 bg-red-50 text-red-800 text-sm border border-red-200">
-              Nie udalo sie wczytac PDF: <span className="font-mono">{String(error)}</span>
+              PDF load error: <span className="font-mono">{String(error)}</span>
             </div>
           )}
 
-          {/* Existing selections */}
           {viewport.width > 0 &&
             current.map((s, i) => {
               const r = fromNorm(s.rect, viewport.width, viewport.height);
@@ -569,25 +475,16 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
                       const rect = containerRef.current.getBoundingClientRect();
                       const x = clamp(e.clientX - rect.left, 0, viewport.width);
                       const y = clamp(e.clientY - rect.top, 0, viewport.height);
-                      setDragging({
-                        mode: "resize",
-                        handle,
-                        startMouse: { x, y },
-                        startRect: { ...r },
-                      });
+                      setDragging({ mode: "resize", handle, startMouse: { x, y }, startRect: { ...r } });
                     }}
                   />
-                  <div
-                    className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br"
-                    style={{ left: 0, top: 0, color: "#fff", background: s.color }}
-                  >
+                  <div className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br" style={{ left: 0, top: 0, color: "#fff", background: s.color }}>
                     {s.type.toUpperCase()}
                   </div>
                 </div>
               );
             })}
 
-          {/* Draft */}
           {draft && (
             <div
               className="absolute border-2 border-dashed"
@@ -603,24 +500,18 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           )}
         </div>
 
-        {/* Results panel (auto updates) */}
         <div className="border rounded-lg p-3 bg-white/60">
-          <div className="font-semibold mb-2">Wyniki (strona {pageNum})</div>
+          <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
           {currentValues.length === 0 ? (
-            <div className="text-sm text-gray-500">Brak zaznaczen na tej stronie.</div>
+            <div className="text-sm text-gray-500">Brak zaznaczen.</div>
           ) : (
             <ul className="space-y-2">
               {currentValues.map((row) => (
                 <li key={row.index} className="text-sm">
-                  <span
-                    className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
-                    style={{ background: chipColor(row.type) }}
-                  >
+                  <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white" style={{ background: chipColor(row.type) }}>
                     {row.type}
                   </span>
-                  <span className="align-middle break-words">
-                    {row.text || <em className="text-gray-500">-</em>}
-                  </span>
+                  <span className="align-middle break-words">{row.text || <em className="text-gray-500">-</em>}</span>
                 </li>
               ))}
             </ul>
@@ -645,4 +536,3 @@ function Legend({ label, color }) {
     </div>
   );
 }
-```
