@@ -2,7 +2,6 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { getDocument } from "pdfjs-dist";
 
 // Typy narzędzi
 const Tool = {
@@ -52,11 +51,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
+  const [pdfjs, setPdfjs] = useState(null); // { getDocument, GlobalWorkerOptions }
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(1);
   const [scale, setScale] = useState(1.25);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [error, setError] = useState(null);
 
   // selections[page] = [{ type, color, rect (norm) }]
   const [selections, setSelections] = useState({});
@@ -68,19 +69,40 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [dragging, setDragging] = useState(null);
   const [converting, setConverting] = useState(false);
 
-  // ⬇️ PDF.js worker – ustaw TYLKO w przeglądarce
+  // 1) Inicjalizacja PDF.js — tylko w przeglądarce, z fallbackami workera
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (typeof window === "undefined") return; // SSR guard
+      if (typeof window === "undefined") return;
       try {
-        const pdfjs = await import("pdfjs-dist");
-        const worker = await import("pdfjs-dist/build/pdf.worker.mjs?url");
-        if (mounted && worker?.default) {
-          pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+        const lib = await import("pdfjs-dist"); // v4.x
+        // Spróbuj kilku ścieżek workera (różne bundlery/wersje)
+        let workerUrl;
+        try {
+          const w = await import("pdfjs-dist/build/pdf.worker.mjs?url");
+          workerUrl = w?.default;
+        } catch {
+          try {
+            const w = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
+            workerUrl = w?.default;
+          } catch {
+            try {
+              const w = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
+              workerUrl = w?.default;
+            } catch (e3) {
+              console.error("[pdfjs] no worker url variant worked", e3);
+            }
+          }
         }
+        if (workerUrl) {
+          lib.GlobalWorkerOptions.workerSrc = workerUrl;
+        } else {
+          console.warn("[pdfjs] running without dedicated worker — may be slow");
+        }
+        if (mounted) setPdfjs(lib);
       } catch (e) {
-        console.error("[pdfjs] worker init failed:", e);
+        console.error("[pdfjs] init failed:", e);
+        if (mounted) setError("Nie udało się zainicjalizować PDF.js");
       }
     })();
     return () => {
@@ -88,33 +110,41 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     };
   }, []);
 
-  // Ładowanie PDF z url LUB z pdfData (Uint8Array)
+  // 2) Ładowanie dokumentu z url LUB z pdfData (Uint8Array)
   useEffect(() => {
     let mounted = true;
     (async () => {
+      if (!pdfjs) return; // czekaj aż PDF.js się załaduje
       if (!pdfUrl && !pdfData) return;
+
+      setError(null);
+      setPdfDoc(null);
+
       try {
         const params = pdfData ? { data: pdfData } : { url: pdfUrl };
-        const doc = await getDocument(params).promise;
+        const doc = await pdfjs.getDocument(params).promise;
         if (!mounted) return;
         setPdfDoc(doc);
         setPageCount(doc.numPages);
         setPageNum(1);
       } catch (err) {
         console.error("PDF load error:", err);
-        if (mounted) {
-          setPdfDoc(null);
-          setPageCount(1);
-          setPageNum(1);
-          alert("Nie udało się wczytać PDF. Sprawdź plik i spróbuj ponownie.");
-        }
+        if (!mounted) return;
+        const msg =
+          err?.message ||
+          (typeof err === "string" ? err : "Nieznany błąd podczas wczytywania PDF");
+        setError(msg);
+        setPdfDoc(null);
+        setPageCount(1);
+        setPageNum(1);
       }
     })();
     return () => {
       mounted = false;
     };
-  }, [pdfUrl, pdfData]);
+  }, [pdfUrl, pdfData, pdfjs]);
 
+  // 3) Render strony
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -128,7 +158,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   }, [pdfDoc, pageNum, scale]);
 
   useEffect(() => {
-    renderPage().catch(console.error);
+    renderPage().catch((e) => console.error("Render error:", e));
   }, [renderPage]);
 
   // Helpers – aktualna strona
@@ -442,6 +472,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         onClick={onClick}
       >
         <canvas ref={canvasRef} className="shadow border" />
+
+        {/* Error overlay */}
+        {error && (
+          <div className="absolute left-0 top-0 w-full p-3 bg-red-50 text-red-800 text-sm border border-red-200">
+            Nie udało się wczytać PDF: <span className="font-mono">{String(error)}</span>
+          </div>
+        )}
 
         {/* Istniejące zaznaczenia */}
         {viewport.width > 0 &&
