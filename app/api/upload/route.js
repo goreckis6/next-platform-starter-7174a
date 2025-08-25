@@ -1,6 +1,5 @@
 // app/api/upload/route.js
-// 👇 WAŻNE: używamy wersji node
-import { put } from "@netlify/blobs/node";
+import { getStore } from "@netlify/blobs";
 
 export const runtime = "nodejs";
 
@@ -33,34 +32,39 @@ export async function POST(request) {
       return json({ error: "Only PDF files are allowed." }, 400);
     }
 
-    // Rozmiar (niektóre środowiska nie podają file.size)
+    // Rozmiar – jeśli brak file.size, policz z ArrayBuffer
     let size = Number.isFinite(file.size) ? file.size : undefined;
     if (size === undefined) {
       const buf = await file.arrayBuffer();
       size = buf.byteLength;
     }
-
     if (size > MAX_BYTES) {
       return json({ error: "File too large. Max 5 MB." }, 413);
     }
 
+    // Uproszczona, bezpieczna nazwa
     const safeName = String(nameRaw).replace(/[^\w.\-()+\s]/g, "_");
 
-    // 👇 zapis do Netlify Blobs
-    const keyBase = `uploads/${Date.now()}-${safeName}`;
-    const { key, url } = await put(keyBase, file, {
-      contentType: file.type || "application/pdf",
-      addRandomSuffix: true,
-      access: "public", // publiczny link
+    // Otwórz site-wide store (zalecane przez Netlify)
+    const uploads = getStore("file-uploads"); // nazwa store'u według docs
+
+    // Wygeneruj unikalny klucz (np. timestamp + nazwa)
+    const key = `uploads/${Date.now()}-${safeName}`;
+
+    // Zapis pliku do Blobs
+    await uploads.set(key, file, {
+      // Możesz dodać własne metadane:
+      // metadata: { any: "value" }
     });
 
+    // Zwracamy key; link do podglądu zapewni drugi endpoint /api/view
     return json({
       ok: true,
       key,
-      url, // tu masz publiczny link do pliku
       filename: safeName,
       size,
       contentType: file.type || "application/pdf",
+      viewUrl: `/api/view?key=${encodeURIComponent(key)}`,
     });
   } catch (e) {
     return json({ error: e?.message || "Upload failed." }, 500);
