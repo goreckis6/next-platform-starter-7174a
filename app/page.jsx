@@ -38,36 +38,40 @@ export default function Page() {
       <section className="max-w-5xl mx-auto px-6 sm:px-12 mb-16">
         <DropZone />
       </section>
-      {/* FEATURES (3 równe boxy, bez obramowań) */}
+         {/* FEATURES (3 boxy, bez obramowania, ikony wyśrodkowane) */}
       <section className="bg-white">
         <div className="max-w-5xl mx-auto px-6 sm:px-12">
-          <div className="grid gap-8 md:grid-cols-3 items-stretch">
+          <div className="grid gap-8 md:grid-cols-3 items-stretch text-center">
             {/* Secure */}
-            <div className="p-6 bg-white flex flex-col h-full">
-              <ShieldCheckIcon className="h-10 w-10 text-blue-600 mb-4" />
+            <div className="p-6 bg-white flex flex-col h-full items-center">
+              <ShieldCheckIcon className="h-12 w-12 text-blue-600 mb-4" />
               <h3 className="text-xl font-semibold mb-2">Secure</h3>
               <p className="text-gray-800">
-                With years of experience in banking we comply with strict standards when handling your files.
+                With years of experience in banking we comply with strict
+                standards when handling your files.
               </p>
               <div className="mt-auto" />
             </div>
 
             {/* Institutional */}
-            <div className="p-6 bg-white flex flex-col h-full">
-              <BuildingOffice2Icon className="h-10 w-10 text-blue-600 mb-4" />
+            <div className="p-6 bg-white flex flex-col h-full items-center">
+              <BuildingOffice2Icon className="h-12 w-12 text-blue-600 mb-4" />
               <h3 className="text-xl font-semibold mb-2">Institutional</h3>
               <p className="text-gray-800">
-                We&apos;ve provided our services to thousands of reputable financial, accounting and legal firms.
+                We&apos;ve provided our services to thousands of reputable
+                financial, accounting and legal firms.
               </p>
               <div className="mt-auto" />
             </div>
 
             {/* Accurate */}
-            <div className="p-6 bg-white flex flex-col h-full">
-              <CheckBadgeIcon className="h-10 w-10 text-blue-600 mb-4" />
+            <div className="p-6 bg-white flex flex-col h-full items-center">
+              <CheckBadgeIcon className="h-12 w-12 text-blue-600 mb-4" />
               <h3 className="text-xl font-semibold mb-2">Accurate</h3>
               <p className="text-gray-800">
-                We&apos;re continually improving our algorithms. If a file doesn&apos;t convert to your expectations, email us and we&apos;ll fix it.
+                We&apos;re continually improving our algorithms. If a file
+                doesn&apos;t convert to your expectations, email us and we&apos;ll
+                fix it.
               </p>
               <div className="mt-auto" />
             </div>
