@@ -1,3 +1,4 @@
+// components/InspectClient.jsx
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -14,6 +15,18 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
+// precise rect intersection with tolerance
+const EPS = 1.5; // px tolerance
+function rectsIntersect(r1, r2) {
+  return !(
+    r2.x > r1.x + r1.w + EPS ||
+    r2.x + r2.w < r1.x - EPS ||
+    r2.y > r1.y + r1.h + EPS ||
+    r2.y + r2.h < r1.y - EPS
+  );
+}
+
+// resize/move handles
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -50,7 +63,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [error, setError] = useState(null);
 
+  // text cache per page: page -> items
   const [textCache, setTextCache] = useState({});
+
+  // selections[page] = [{ type, color, rect (normalized) }]
   const [selections, setSelections] = useState({});
   const [tool, setTool] = useState(Tool.TABLE);
   const colorIndexRef = useRef({ table: 0, column: 0, row: 0 });
@@ -59,8 +75,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
+  // auto extracted values: values[page] = [{index,type,text}]
   const [values, setValues] = useState({});
 
+  // init pdf.js with worker fallbacks
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -95,9 +113,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         if (mounted) setError("PDF.js init failed");
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, []);
 
+  // load document from url or pdfData
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -125,9 +146,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         setPageNum(1);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [pdfUrl, pdfData, pdfjs]);
 
+  // render page and cache text
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -149,6 +173,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     renderPage().catch((e) => console.error("Render error:", e));
   }, [renderPage]);
 
+  // helpers for current page
   const current = selections[pageNum] || [];
   const setCurrent = (updater) =>
     setSelections((prev) => {
@@ -157,10 +182,17 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       return { ...prev, [pageNum]: next };
     });
 
+  // toolbar actions
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
-  const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
-  const nextPage = () => { setActiveIndex(-1); setPageNum((n) => Math.min(pageCount, n + 1)); };
+  const prevPage = () => {
+    setActiveIndex(-1);
+    setPageNum((n) => Math.max(1, n - 1));
+  };
+  const nextPage = () => {
+    setActiveIndex(-1);
+    setPageNum((n) => Math.min(pageCount, n + 1));
+  };
 
   const nextColorFor = (t) => {
     const list = COLORS[t];
@@ -169,6 +201,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return list[i];
   };
 
+  // hit testing
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
 
   const hitTestBox = (x, y) => {
@@ -183,17 +216,21 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     const r = pxFromNorm(current[idx].rect);
     const size = 8;
     const near = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
+
     if (near(r.x, r.y)) return "tl";
     if (near(r.x + r.w, r.y)) return "tr";
     if (near(r.x, r.y + r.h)) return "bl";
     if (near(r.x + r.w, r.y + r.h)) return "br";
+
     if (Math.abs(x - r.x) <= size && y >= r.y && y <= r.y + r.h) return "l";
     if (Math.abs(x - (r.x + r.w)) <= size && y >= r.y && y <= r.y + r.h) return "r";
     if (Math.abs(y - r.y) <= size && x >= r.x && x <= r.x + r.w) return "t";
     if (Math.abs(y - (r.y + r.h)) <= size && x >= r.x && x <= r.x + r.w) return "b";
+
     return null;
   };
 
+  // mouse events
   const onMouseDown = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -205,8 +242,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       setActiveIndex(hitIdx);
       const h = hitTestHandle(sx, sy, hitIdx);
       const r = pxFromNorm(current[hitIdx].rect);
-      if (h) setDragging({ mode: "resize", handle: h, startMouse: { x: sx, y: sy }, startRect: r });
-      else setDragging({ mode: "move", handle: null, startMouse: { x: sx, y: sy }, startRect: r });
+      if (h) {
+        setDragging({ mode: "resize", handle: h, startMouse: { x: sx, y: sy }, startRect: r });
+      } else {
+        setDragging({ mode: "move", handle: null, startMouse: { x: sx, y: sy }, startRect: r });
+      }
       return;
     }
 
@@ -238,6 +278,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       } else if (mode === "resize") {
         const r = { ...startRect };
         const minSize = 8;
+
         if (["tl", "l", "bl"].includes(handle)) {
           const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width);
           r.w = r.x + r.w - nx;
@@ -256,6 +297,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height);
           r.h = ny2 - r.y;
         }
+
         setCurrent((prev) => {
           const next = [...prev];
           next[activeIndex] = {
@@ -280,7 +322,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   const onMouseUp = () => {
-    if (dragging) { setDragging(null); return; }
+    if (dragging) {
+      setDragging(null);
+      return;
+    }
     if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
@@ -293,6 +338,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     if (!containerRef.current || dragging || draft) return;
   };
 
+  // keyboard
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -313,47 +359,74 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
+  // precise auto-extract with intersection and sorting
   const extractTextsForPage = useCallback(
     (page) => {
       const pageSelections = selections[page] || [];
       const items = textCache[page];
       if (!items || viewport.width === 0 || viewport.height === 0) return [];
+
+      // precompute boxes for items
+      const boxes = items.map((it, idx) => {
+        const t = it.transform || [];
+        const a = t[0] ?? 0;
+        const b = t[1] ?? 0;
+        const c = t[2] ?? 0;
+        const d = t[3] ?? 0;
+        const e = t[4] ?? 0; // x
+        const f = t[5] ?? 0; // baseline y
+        const w = it.width || 0;
+        const h = Math.abs(d) || it.height || 0; // glyph box height
+        const x = e;
+        const y = f - h; // convert baseline to top-left
+        return { idx, it, x, y, w, h };
+      });
+
       return pageSelections.map((sel, i) => {
         const r = fromNorm(sel.rect, viewport.width, viewport.height);
-        const texts = items
-          .map((it) => {
-            const t = it.transform || [];
-            const e = t[4] ?? 0;
-            const f = t[5] ?? 0;
-            const w = it.width || 0;
-            const h = it.height || 0;
-            const x = e;
-            const y = f - h;
-            const inside = x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
-            return inside ? it.str : null;
-          })
-          .filter(Boolean);
-        return { index: i, type: sel.type, text: texts.join(" ") };
+
+        // collect intersecting items
+        const picked = [];
+        for (const bx of boxes) {
+          if (rectsIntersect(r, bx)) picked.push(bx);
+        }
+
+        // sort by y (ascending), then x
+        picked.sort((p, q) => {
+          const dy = p.y - q.y;
+          if (Math.abs(dy) > 0.5) return dy;
+          return p.x - q.x;
+        });
+
+        const text = picked.map((bx) => bx.it.str).join(" ");
+
+        return { index: i, type: sel.type, text };
       });
     },
     [selections, textCache, viewport.width, viewport.height]
   );
 
+  // recompute values when dependencies change
   useEffect(() => {
     if (!pdfDoc) return;
     const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
     if (pagesWithText.length === 0) return;
+
     setValues((prev) => {
       const next = { ...prev };
-      for (const p of pagesWithText) next[p] = extractTextsForPage(p);
+      for (const p of pagesWithText) {
+        next[p] = extractTextsForPage(p);
+      }
       return next;
     });
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, extractTextsForPage]);
 
   const currentValues = values[pageNum] || [];
 
+  // export csv using the same precise logic
   const handleExportCSV = async () => {
     if (!pdfDoc) return;
+
     const pages = Object.keys(selections)
       .map((k) => parseInt(k, 10))
       .filter((p) => (selections[p] || []).length > 0)
@@ -374,22 +447,35 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         items = txt.items;
       }
 
+      // precompute boxes for that page
+      const boxes = items.map((it, idx) => {
+        const t = it.transform || [];
+        const d = t[3] ?? 0;
+        const e = t[4] ?? 0;
+        const f = t[5] ?? 0;
+        const w = it.width || 0;
+        const h = Math.abs(d) || it.height || 0;
+        const x = e;
+        const y = f - h;
+        return { idx, it, x, y, w, h };
+      });
+
       pageSelections.forEach((sel, i) => {
         const r = fromNorm(sel.rect, vp.width, vp.height);
-        const texts = items
-          .map((it) => {
-            const t = it.transform || [];
-            const e = t[4] ?? 0;
-            const f = t[5] ?? 0;
-            const w = it.width || 0;
-            const h = it.height || 0;
-            const x = e;
-            const y = f - h;
-            const inside = x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
-            return inside ? it.str : null;
-          })
-          .filter(Boolean);
-        rows.push([p, i, sel.type, texts.join(" ")]);
+
+        const picked = [];
+        for (const bx of boxes) {
+          if (rectsIntersect(r, bx)) picked.push(bx);
+        }
+
+        picked.sort((p, q) => {
+          const dy = p.y - q.y;
+          if (Math.abs(dy) > 0.5) return dy;
+          return p.x - q.x;
+        });
+
+        const text = picked.map((bx) => bx.it.str).join(" ");
+        rows.push([p, i, sel.type, text]);
       });
     }
 
