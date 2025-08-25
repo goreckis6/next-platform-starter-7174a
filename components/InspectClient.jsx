@@ -59,6 +59,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [error, setError] = useState(null);
 
+  // Cache tekstu per strona: page -> items
+  const [textCache, setTextCache] = useState({});
+
   // selections[page] = [{ type, color, rect (norm) }]
   const [selections, setSelections] = useState({});
   const [tool, setTool] = useState(Tool.TABLE);
@@ -68,15 +71,15 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
   const [converting, setConverting] = useState(false);
+  const [extracting, setExtracting] = useState(false);
 
-  // 1) Inicjalizacja PDF.js — tylko w przeglądarce, z fallbackami workera
+  // 1) Inicjalizacja PDF.js — tylko w przeglądarce, z fallbackiem workera
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (typeof window === "undefined") return;
+      if (typeof window === "undefined") return; // SSR guard
       try {
-        const lib = await import("pdfjs-dist"); // v4.x
-        // Spróbuj kilku ścieżek workera (różne bundlery/wersje)
+        const lib = await import("pdfjs-dist");
         let workerUrl;
         try {
           const w = await import("pdfjs-dist/build/pdf.worker.mjs?url");
@@ -114,11 +117,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!pdfjs) return; // czekaj aż PDF.js się załaduje
+      if (!pdfjs) return; // czekamy na PDF.js
       if (!pdfUrl && !pdfData) return;
 
       setError(null);
       setPdfDoc(null);
+      setTextCache({});
 
       try {
         const params = pdfData ? { data: pdfData } : { url: pdfUrl };
@@ -130,9 +134,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       } catch (err) {
         console.error("PDF load error:", err);
         if (!mounted) return;
-        const msg =
-          err?.message ||
-          (typeof err === "string" ? err : "Nieznany błąd podczas wczytywania PDF");
+        const msg = err?.message || (typeof err === "string" ? err : "Nieznany błąd podczas wczytywania PDF");
         setError(msg);
         setPdfDoc(null);
         setPageCount(1);
@@ -144,7 +146,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     };
   }, [pdfUrl, pdfData, pdfjs]);
 
-  // 3) Render strony
+  // 3) Render strony + cache textContent
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -155,7 +157,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     canvas.height = vp.height;
     setViewport({ width: vp.width, height: vp.height });
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
-  }, [pdfDoc, pageNum, scale]);
+
+    if (!textCache[pageNum]) {
+      const txt = await page.getTextContent();
+      setTextCache((prev) => ({ ...prev, [pageNum]: txt.items }));
+    }
+  }, [pdfDoc, pageNum, scale, textCache]);
 
   useEffect(() => {
     renderPage().catch((e) => console.error("Render error:", e));
@@ -190,7 +197,35 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return list[i];
   };
 
-  // Rysowanie/edycja
+  // --- Rysowanie / edycja ---
+  const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
+
+  const hitTestBox = (x, y) => {
+    for (let i = current.length - 1; i >= 0; i--) {
+      const r = pxFromNorm(current[i].rect);
+      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i;
+    }
+    return -1;
+  };
+
+  const hitTestHandle = (x, y, idx) => {
+    const r = pxFromNorm(current[idx].rect);
+    const size = 8;
+    const near = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
+
+    if (near(r.x, r.y)) return "tl";
+    if (near(r.x + r.w, r.y)) return "tr";
+    if (near(r.x, r.y + r.h)) return "bl";
+    if (near(r.x + r.w, r.y + r.h)) return "br";
+
+    if (Math.abs(x - r.x) <= size && y >= r.y && y <= r.y + r.h) return "l";
+    if (Math.abs(x - (r.x + r.w)) <= size && y >= r.y && y <= r.y + r.h) return "r";
+    if (Math.abs(y - r.y) <= size && x >= r.x && x <= r.x + r.w) return "t";
+    if (Math.abs(y - (r.y + r.h)) <= size && x >= r.x && x <= r.x + r.w) return "b";
+
+    return null;
+  };
+
   const onMouseDown = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -294,32 +329,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     setDraft(null);
   };
 
-  const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
-  const hitTestBox = (x, y) => {
-    for (let i = current.length - 1; i >= 0; i--) {
-      const r = pxFromNorm(current[i].rect);
-      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i;
-    }
-    return -1;
-  };
-  const hitTestHandle = (x, y, idx) => {
-    const r = pxFromNorm(current[idx].rect);
-    const size = 8;
-    const near = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
-
-    if (near(r.x, r.y)) return "tl";
-    if (near(r.x + r.w, r.y)) return "tr";
-    if (near(r.x, r.y + r.h)) return "bl";
-    if (near(r.x + r.w, r.y + r.h)) return "br";
-
-    if (Math.abs(x - r.x) <= size && y >= r.y && y <= r.y + r.h) return "l";
-    if (Math.abs(x - (r.x + r.w)) <= size && y >= r.y && y <= r.y + r.h) return "r";
-    if (Math.abs(y - r.y) <= size && x >= r.x && x <= r.x + r.w) return "t";
-    if (Math.abs(y - (r.y + r.h)) <= size && x >= r.x && x <= r.x + r.w) return "b";
-
-    return null;
-  };
-
   const onClick = (e) => {
     if (!containerRef.current || dragging || draft) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -349,7 +358,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // Convert → CSV (pobieranie)
+  // Convert → CSV (współrzędne)
   const handleConvert = async () => {
     try {
       setConverting(true);
@@ -392,13 +401,63 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     }
   };
 
+  // Extract → CSV (tekst z obszarów)
+  const handleExtractText = async () => {
+    try {
+      setExtracting(true);
+      const rows = [["page", "index", "type", "text"]];
+
+      for (const [pageStr, arr] of Object.entries(selections)) {
+        const page = parseInt(pageStr, 10);
+        const items = textCache[page];
+        if (!items) continue; // strona nie była jeszcze renderowana → brak cache
+
+        arr.forEach((sel, i) => {
+          const r = fromNorm(sel.rect, viewport.width, viewport.height);
+          const texts = items
+            .map((it) => {
+              // transform: [a,b,c,d,e,f]  |  e=tx (x), f=ty (baseline y)
+              const [a, b, c, d, e, f] = it.transform || [];
+              const w = it.width || 0;
+              const h = it.height || 0;
+              const x = e ?? 0;
+              const y = (f ?? 0) - h; // górny lewy róg
+              const inside =
+                x >= r.x &&
+                y >= r.y &&
+                x + w <= r.x + r.w &&
+                y + h <= r.y + r.h;
+              return inside ? it.str : null;
+            })
+            .filter(Boolean);
+
+          rows.push([page, i, sel.type, texts.join(" ")]);
+        });
+      }
+
+      const csv = rows
+        .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+        .join("
+");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `extracted-${uuid || "file"}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   return (
     <div className="w-full">
       {/* Toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="text-sm px-2 py-1 border rounded">
-          Page {pageNum}/{pageCount}
-        </div>
+        <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
 
         <div className="flex items-center gap-1">
           <button
@@ -426,18 +485,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
         <span className="mx-1" />
 
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>
-          [+] Zoom In
-        </button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>
-          [-] Zoom Out
-        </button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>
-          [&lt;] Previous Page
-        </button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>
-          [&gt;] Next Page
-        </button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>[+] Zoom In</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>[-] Zoom Out</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>&lt; Prev</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>Next &gt;</button>
 
         {/* Legendka */}
         <div className="ml-auto flex items-center gap-3 text-sm">
@@ -446,17 +497,23 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           <Legend label="Row" color={COLORS.row[0]} />
         </div>
 
-        {/* Convert */}
-        <div>
+        {/* Akcje */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExtractText}
+            disabled={extracting}
+            className={`px-4 py-2 rounded-md text-white font-semibold ${extracting ? "bg-green-400 cursor-not-allowed" : "bg-green-600 hover:bg-green-700"}`}
+            title="Extract selected text to CSV"
+          >
+            {extracting ? "Extracting…" : "Extract Text"}
+          </button>
           <button
             onClick={handleConvert}
             disabled={converting || !uuid}
-            className={`ml-2 px-4 py-2 rounded-md text-white font-semibold transition ${
-              converting ? "bg-blue-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"
-            }`}
-            title="Convert selections to CSV"
+            className={`px-4 py-2 rounded-md text-white font-semibold ${converting ? "bg-blue-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700"}`}
+            title="Convert selections to CSV (coords)"
           >
-            {converting ? "Converting…" : "Convert"}
+            {converting ? "Converting…" : "Convert (coords)"}
           </button>
         </div>
       </div>
