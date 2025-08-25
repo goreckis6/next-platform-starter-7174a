@@ -9,7 +9,7 @@
   margin-bottom: 56px;
 }
 
-.title {
+h1 {
   font-size: 40px;
   line-height: 1.1;
   margin: 0 0 12px;
@@ -49,12 +49,12 @@
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
-.cardTitle {
+.card h3 {
   margin: 0 0 8px;
   font-size: 18px;
 }
 
-.cardText {
+.card p {
   margin: 0;
   color: #475569;
 }
@@ -80,7 +80,7 @@
   text-align: center;
 }
 
-.tierTitle {
+.tier h2 {
   margin: 0 0 4px;
 }
 
@@ -89,13 +89,13 @@
   margin-bottom: 12px;
 }
 
-.tierList {
+.tier ul {
   list-style: none;
   padding: 0;
   margin: 0 0 8px;
 }
 
-.tierItem {
+.tier li {
   margin: 4px 0;
 }
 
@@ -111,14 +111,6 @@
   padding: 28px;
   background: #f8fafc;
   margin-bottom: 40px;
-}
-
-.sectionTitle {
-  margin: 0 0 8px;
-}
-
-.sectionText {
-  margin: 0 0 16px;
 }
 
 .footer {
@@ -159,6 +151,7 @@
 .btnGhost {
   background: #f1f5f9;
   color: #0f172a;
+  border-color: #e2e8f0;
   border: 1px solid #e2e8f0;
 }
 
@@ -167,5 +160,5 @@
 }
 
 .copy {
-  /* opcjonalnie */
+  /* opcjonalnie, jeżeli chcesz nadpisać coś dla copy */
 }
