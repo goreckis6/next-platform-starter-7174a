@@ -4,6 +4,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { getDocument } from "pdfjs-dist";
 import "pdfjs-dist/build/pdf.worker.entry";
+import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
+import workerSrc from "pdfjs-dist/build/pdf.worker.mjs?url";
+GlobalWorkerOptions.workerSrc = workerSrc;
+
 
 
 // Narzędzia/typy zaznaczeń
