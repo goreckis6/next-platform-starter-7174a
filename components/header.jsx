@@ -16,7 +16,7 @@ export function Header() {
   const [open, setOpen] = useState(false);
 
   return (
-    <header className="bg-white border-b">
+    <header className="bg-white border-b border-gray-300 w-full">
       <nav className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
@@ -45,7 +45,6 @@ export function Header() {
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
-          {/* Hamburger / Close icons (pure CSS) */}
           <span className="sr-only">Toggle menu</span>
           <div className="relative h-5 w-6">
             <span
@@ -69,7 +68,7 @@ export function Header() {
 
       {/* Mobile panel */}
       {open && (
-        <div className="md:hidden border-t">
+        <div className="md:hidden border-t border-gray-300">
           <ul className="mx-auto max-w-7xl px-4 py-3 space-y-2">
             {navItems.map((item) => (
               <li key={item.href}>
