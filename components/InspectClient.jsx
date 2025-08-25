@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { getDocument } from "pdfjs-dist";
 import "pdfjs-dist/build/pdf.worker.entry";
 
+
 // Narzędzia/typy zaznaczeń
 const Tool = {
   TABLE: "table",
