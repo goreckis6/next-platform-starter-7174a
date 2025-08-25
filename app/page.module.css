@@ -17,7 +17,7 @@
 
 .lead {
   font-size: 18px;
-  color: #475569;
+  color: #000;              /* było #475569 */
   margin: 0 auto 20px;
   max-width: 700px;
 }
@@ -45,7 +45,7 @@
   border: 1px solid #e2e8f0;
   border-radius: 16px;
   padding: 20px;
-  background: #fff;
+  background: #fff;         /* białe tło */
   box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
@@ -56,7 +56,7 @@
 
 .cardText {
   margin: 0;
-  color: #475569;
+  color: #000;              /* było #475569 */
 }
 
 .tiers {
@@ -76,7 +76,7 @@
   border: 1px solid #e2e8f0;
   border-radius: 16px;
   padding: 24px;
-  background: #fff;
+  background: #fff;         /* białe tło */
   text-align: center;
 }
 
@@ -85,7 +85,7 @@
 }
 
 .muted {
-  color: #64748b;
+  color: #000;              /* było #64748b */
   margin-bottom: 12px;
 }
 
@@ -109,7 +109,7 @@
   border: 1px solid #e2e8f0;
   border-radius: 16px;
   padding: 28px;
-  background: #f8fafc;
+  background: #fff;         /* było #f8fafc */
   margin-bottom: 40px;
 }
 
@@ -127,6 +127,7 @@
   display: grid;
   gap: 12px;
   justify-items: center;
+  background: #fff;         /* dodane dla spójności */
 }
 
 .links {
@@ -167,5 +168,5 @@
 }
 
 .copy {
-  /* opcjonalnie */
+  color: #000;
 }
