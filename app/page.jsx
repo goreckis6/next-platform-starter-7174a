@@ -1,7 +1,7 @@
 // app/page.jsx
-import DropZone from "../components/DropZone";
 import Link from "next/link";
 import styles from "./page.module.css";
+import DropZone from "../components/DropZone"; // ⬅️ dodane
 
 export default function Page() {
   return (
@@ -16,6 +16,11 @@ export default function Page() {
           <Link className={`${styles.btn} ${styles.btnPrimary}`} href="/dashboard">Try for free</Link>
           <Link className={`${styles.btn} ${styles.btnGhost}`} href="/pricing">See pricing</Link>
         </div>
+      </section>
+
+      {/* DROP ZONE – pełna szerokość, 500px wysokości */}
+      <section className={styles.dropWrapper}>
+        <DropZone />
       </section>
 
       {/* FEATURES */}
