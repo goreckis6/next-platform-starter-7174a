@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { ArrowUpTrayIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/outline";
+import {
+  ArrowUpTrayIcon,
+  Cog6ToothIcon,       // Convert
+  MagnifyingGlassIcon, // Inspect
+  CheckCircleIcon,
+  XCircleIcon,
+} from "@heroicons/react/24/outline";
 
 export default function DropZone() {
   const [isDragging, setIsDragging] = useState(false);
@@ -9,7 +15,7 @@ export default function DropZone() {
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState(null);
+  const [result, setResult] = useState(null); // { ok, uuid, key, filename, inspectUrl, viewUrl, ... }
 
   const isPdf = (f) =>
     f?.type === "application/pdf" || f?.name?.toLowerCase().endsWith(".pdf");
@@ -73,15 +79,12 @@ export default function DropZone() {
 
     xhr.onload = () => {
       setUploading(false);
-      try {
-        const data = JSON.parse(xhr.responseText || "{}");
-        if (xhr.status >= 200 && xhr.status < 300) {
-          setResult(data);
-        } else {
-          setError(data?.error || "Upload failed.");
-        }
-      } catch {
-        setError("Upload failed (invalid server response).");
+      let data = {};
+      try { data = JSON.parse(xhr.responseText || "{}"); } catch {}
+      if (xhr.status >= 200 && xhr.status < 300) {
+        setResult(data);
+      } else {
+        setError(data?.error || `Upload failed (status ${xhr.status})`);
       }
     };
 
@@ -118,8 +121,10 @@ export default function DropZone() {
         className="hidden"
       />
 
+      {/* Ikona */}
       <ArrowUpTrayIcon className="h-16 w-16 text-gray-700 mb-4 pointer-events-none" />
 
+      {/* Teksty */}
       <div className="text-center mb-6 pointer-events-none">
         <p className="text-lg font-medium text-gray-800">
           Drag & drop your PDF here
@@ -127,6 +132,7 @@ export default function DropZone() {
         <p className="text-sm text-gray-700">or click anywhere in the box</p>
       </div>
 
+      {/* CTA */}
       <button
         type="button"
         onClick={(e) => {
@@ -140,6 +146,7 @@ export default function DropZone() {
         {uploading ? "Uploading…" : "Click here to convert a PDF"}
       </button>
 
+      {/* Info o pliku */}
       {file && (
         <div className="mt-4 text-sm text-gray-900 flex items-center gap-2">
           <span className="font-medium">Selected:</span>
@@ -148,6 +155,7 @@ export default function DropZone() {
         </div>
       )}
 
+      {/* Pasek postępu */}
       {(uploading || progress > 0) && (
         <div className="mt-4 w-full max-w-xl px-6">
           <div className="w-full h-2 bg-white/60 rounded">
@@ -160,27 +168,64 @@ export default function DropZone() {
         </div>
       )}
 
-      {result && !error && !uploading && (
-        <div className="mt-4 flex items-center gap-2 text-green-700">
-          <CheckCircleIcon className="h-5 w-5" />
-          <span>Uploaded successfully.</span>
-        </div>
-      )}
-      {!!error && (
-        <div className="mt-4 flex items-center gap-2 text-red-600">
-          <XCircleIcon className="h-5 w-5" />
-          <span>{error}</span>
+      {/* Po sukcesie — akcje: Convert + Inspect */}
+      {result?.ok && !uploading && !error && (
+        <div
+          className="mt-6 flex flex-col items-center gap-3"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Nazwa pliku z serwera (bezpieczna) */}
+          <div className="text-sm text-gray-900">
+            Uploaded: <span className="font-medium">{result.filename}</span>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Convert — tu kieruję do dashboardu z uuid/key w query (dostosuj do swojego flow) */}
+            <a
+              href={`/dashboard?uuid=${encodeURIComponent(
+                result.uuid
+              )}&key=${encodeURIComponent(result.key)}`}
+              className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-white text-sm font-semibold hover:bg-blue-700 transition"
+            >
+              <Cog6ToothIcon className="h-5 w-5" />
+              Convert
+            </a>
+
+            {/* Inspect — gotowy link z backendu jak w przykładzie */}
+            <a
+              href={result.inspectUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-md border border-gray-300 px-4 py-2 text-gray-900 text-sm font-semibold hover:bg-gray-100 transition"
+            >
+              <MagnifyingGlassIcon className="h-5 w-5" />
+              Inspect
+            </a>
+          </div>
+
+          {/* (opcjonalnie) podgląd pliku jeśli masz /api/view */}
+          {result.viewUrl && (
+            <a
+              href={result.viewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 underline text-xs"
+            >
+              View uploaded file
+            </a>
+          )}
         </div>
       )}
 
-      {result && !uploading && !error && (
-        <a
-          href="/dashboard"
-          className="mt-4 inline-block rounded-md border border-blue-600 px-4 py-2 text-blue-600 hover:bg-blue-50 transition text-sm"
+      {/* Błędy */}
+      {!!error && (
+        <div
+          className="mt-4 flex items-center gap-2 text-red-600"
           onClick={(e) => e.stopPropagation()}
         >
-          Continue to conversion
-        </a>
+          <XCircleIcon className="h-5 w-5" />
+          <span>{error}</span>
+        </div>
       )}
     </div>
   );
