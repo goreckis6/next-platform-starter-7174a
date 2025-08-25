@@ -1,4 +1,5 @@
 // app/page.jsx
+import DropZone from "../components/DropZone";
 import Link from "next/link";
 import styles from "./page.module.css";
 
