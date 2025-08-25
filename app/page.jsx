@@ -39,25 +39,27 @@ export default function Page() {
         </div>
       </section>
 
-      {/* FEATURES */}
-<section className={`${styles.features} bg-white text-black`}>
-  <div className={styles.card}>
-    <h3>Secure</h3>
-    <p>
-      With years of experience in banking we comply with strict standards when handling your files.
-    </p>
-  </div>
-  <div className={styles.card}>
-    <h3>Institutional</h3>
-    <p>
-      We've provided our services to thousands of reputable financial, accounting and legal firms.
-    </p>
-  </div>
-  <div className={styles.card}>
-    <h3>Accurate</h3>
-    <p>
-      We're continually improving our algorithms. If a file doesn't convert to your expectations, email us and we'll fix it.
-    </p>
+    {/* FEATURES */}
+<section className="bg-white py-16 px-6">
+  <div className="grid gap-8 md:grid-cols-3 max-w-6xl mx-auto">
+    <div className="p-6 border rounded-lg shadow-sm bg-white">
+      <h3 className="text-xl font-semibold mb-2">Secure</h3>
+      <p>
+        With years of experience in banking we comply with strict standards when handling your files.
+      </p>
+    </div>
+    <div className="p-6 border rounded-lg shadow-sm bg-white">
+      <h3 className="text-xl font-semibold mb-2">Institutional</h3>
+      <p>
+        We&apos;ve provided our services to thousands of reputable financial, accounting and legal firms.
+      </p>
+    </div>
+    <div className="p-6 border rounded-lg shadow-sm bg-white">
+      <h3 className="text-xl font-semibold mb-2">Accurate</h3>
+      <p>
+        We&apos;re continually improving our algorithms. If a file doesn&apos;t convert to your expectations, email us and we&apos;ll fix it.
+      </p>
+    </div>
   </div>
 </section>
 
