@@ -5,11 +5,11 @@ import { ArrowUpTrayIcon, CheckCircleIcon, XCircleIcon } from "@heroicons/react/
 
 export default function DropZone() {
   const [isDragging, setIsDragging] = useState(false);
-  const [file, setFile] = useState(null);            // obiekt File
+  const [file, setFile] = useState(null);
   const [error, setError] = useState("");
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState(null);        // odpowiedź z /api/upload
+  const [result, setResult] = useState(null);
 
   const isPdf = (f) =>
     f?.type === "application/pdf" || f?.name?.toLowerCase().endsWith(".pdf");
@@ -56,7 +56,6 @@ export default function DropZone() {
     uploadFile(picked);
   };
 
-  // XHR do /api/upload żeby mieć native upload progress
   const uploadFile = (f) => {
     setUploading(true);
     setProgress(0);
@@ -68,8 +67,7 @@ export default function DropZone() {
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        setProgress(pct);
+        setProgress(Math.round((e.loaded / e.total) * 100));
       }
     };
 
@@ -108,11 +106,10 @@ export default function DropZone() {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      onClick={openFileDialog} // cały box klikalny
+      onClick={openFileDialog}
       role="region"
       aria-label="PDF upload dropzone"
     >
-      {/* ukryty input */}
       <input
         id="pdf-input"
         type="file"
@@ -121,20 +118,15 @@ export default function DropZone() {
         className="hidden"
       />
 
-      {/* Ikona */}
       <ArrowUpTrayIcon className="h-16 w-16 text-gray-700 mb-4 pointer-events-none" />
 
-      {/* Tekst */}
       <div className="text-center mb-6 pointer-events-none">
         <p className="text-lg font-medium text-gray-800">
           Drag & drop your PDF here
         </p>
-        <p className="text-sm text-gray-700">
-          or click anywhere in the box
-        </p>
+        <p className="text-sm text-gray-700">or click anywhere in the box</p>
       </div>
 
-      {/* CTA */}
       <button
         type="button"
         onClick={(e) => {
@@ -148,7 +140,6 @@ export default function DropZone() {
         {uploading ? "Uploading…" : "Click here to convert a PDF"}
       </button>
 
-      {/* Info o wybranym pliku */}
       {file && (
         <div className="mt-4 text-sm text-gray-900 flex items-center gap-2">
           <span className="font-medium">Selected:</span>
@@ -157,7 +148,6 @@ export default function DropZone() {
         </div>
       )}
 
-      {/* Pasek postępu */}
       {(uploading || progress > 0) && (
         <div className="mt-4 w-full max-w-xl px-6">
           <div className="w-full h-2 bg-white/60 rounded">
@@ -170,7 +160,6 @@ export default function DropZone() {
         </div>
       )}
 
-      {/* Wynik / błąd */}
       {result && !error && !uploading && (
         <div className="mt-4 flex items-center gap-2 text-green-700">
           <CheckCircleIcon className="h-5 w-5" />
@@ -184,7 +173,6 @@ export default function DropZone() {
         </div>
       )}
 
-      {/* Dalszy krok po udanym uploadzie */}
       {result && !uploading && !error && (
         <a
           href="/dashboard"
