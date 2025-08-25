@@ -5,7 +5,8 @@ export const revalidate = 0;
 import Link from "next/link";
 import { headers } from "next/headers";
 import InspectClient from "../../components/InspectClient";
-import PdfUploader from "@/components/PdfUploader";
+import PdfUploader from "../../components/PdfUploader";
+
 
 async function fetchMeta(uuid) {
   // 1) spróbuj z env
