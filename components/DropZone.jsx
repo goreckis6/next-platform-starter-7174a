@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
+import { ArrowUpTrayIcon } from "@heroicons/react/24/outline"; // ikona uploadu
 
 export default function DropZone() {
   const handleDrop = useCallback((event) => {
@@ -8,7 +9,7 @@ export default function DropZone() {
     const files = event.dataTransfer.files;
     if (files.length > 0) {
       console.log("Dropped file:", files[0]);
-      // tutaj możesz zrobić upload / konwersję
+      // TODO: obsłuż upload / konwersję
     }
   }, []);
 
@@ -16,7 +17,7 @@ export default function DropZone() {
     const file = event.target.files[0];
     if (file) {
       console.log("Selected file:", file);
-      // tutaj możesz zrobić upload / konwersję
+      // TODO: obsłuż upload / konwersję
     }
   };
 
@@ -39,7 +40,10 @@ export default function DropZone() {
         className="hidden"
       />
 
-      <p className="text-lg font-medium text-gray-700 mb-6">
+      {/* Ikona uploadu */}
+      <ArrowUpTrayIcon className="h-16 w-16 text-gray-600 mb-6" />
+
+      <p className="text-lg font-medium text-gray-700 mb-6 text-center">
         Drag & drop your PDF here <br /> or click anywhere in the box
       </p>
 
