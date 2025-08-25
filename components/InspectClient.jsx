@@ -317,11 +317,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   const onMouseUp = () => {
-    if (dragging) {
-      setDragging(null);
-      return;
-    }
-    if (draft && draft.w >= 6 && draft.h >= 6) {
+    if (dragging) setDragging(null);
+    else if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
       setActiveIndex(current.length);
@@ -337,7 +334,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     setActiveIndex(hitTestBox(x, y));
   };
 
-  // Klawiatura: Delete, 1/2/3, zoom/prev/next
+  // Klawiatura
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -437,8 +434,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
       const csv = rows
         .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
-        .join("
-");
+        .join("\n"); // <— ważne: jedna linia, \n w stringu
+
       const blob = new Blob([csv], { type: "text/csv" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
