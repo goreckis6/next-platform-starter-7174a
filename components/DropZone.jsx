@@ -1,97 +1,54 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 
 export default function DropZone() {
-  const [isDragging, setIsDragging] = useState(false);
-  const [file, setFile] = useState(null);
-  const [error, setError] = useState("");
-
-  const onDragOver = useCallback((e) => {
-    e.preventDefault();
-    setIsDragging(true);
-  }, []);
-
-  const onDragLeave = useCallback((e) => {
-    e.preventDefault();
-    setIsDragging(false);
-  }, []);
-
-  const onDrop = useCallback((e) => {
-    e.preventDefault();
-    setIsDragging(false);
-    setError("");
-    const dropped = e.dataTransfer.files?.[0];
-    if (!dropped) return;
-    const isPdf = dropped.type === "application/pdf" || dropped.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      setError("Please drop a PDF file.");
-      setFile(null);
-      return;
+  const handleDrop = useCallback((event) => {
+    event.preventDefault();
+    const files = event.dataTransfer.files;
+    if (files.length > 0) {
+      console.log("Dropped file:", files[0]);
+      // tutaj możesz zrobić upload / konwersję
     }
-    setFile(dropped);
   }, []);
 
-  const onPick = useCallback((e) => {
-    const picked = e.target.files?.[0];
-    if (!picked) return;
-    setError("");
-    const isPdf = picked.type === "application/pdf" || picked.name.toLowerCase().endsWith(".pdf");
-    if (!isPdf) {
-      setError("Please choose a PDF file.");
-      setFile(null);
-      return;
+  const handleFileSelect = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      console.log("Selected file:", file);
+      // tutaj możesz zrobić upload / konwersję
     }
-    setFile(picked);
-  }, []);
+  };
 
-  const openFileDialog = useCallback(() => {
-    document.getElementById("file-upload")?.click();
-  }, []);
+  const handleClick = () => {
+    document.getElementById("fileInput").click();
+  };
 
   return (
     <div
-      className={`w-full h-[500px] bg-white border-2 border-dashed flex items-center justify-center text-center px-4 rounded-xl transition-colors ${
-        isDragging ? "border-[#2563eb] bg-[#f0f4ff]" : "border-[#808191]"
-      }`}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      onDrop={onDrop}
-      role="region"
-      aria-label="PDF upload dropzone"
+      className="relative w-full h-[500px] rounded-lg border-2 border-dashed border-gray-400 flex flex-col items-center justify-center cursor-pointer bg-[#F1F0EF] transition hover:border-gray-600"
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleDrop}
+      onClick={handleClick} // cały box klikalny
     >
-      <div className="space-y-4">
-        <p className="text-black text-lg">Drag & drop your PDF here</p>
+      <input
+        id="fileInput"
+        type="file"
+        accept="application/pdf"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
 
-        {/* Hidden file input */}
-        <input
-          id="file-upload"
-          type="file"
-          accept="application/pdf"
-          className="hidden"
-          onChange={onPick}
-        />
+      <p className="text-lg font-medium text-gray-700 mb-6">
+        Drag & drop your PDF here <br /> or click anywhere in the box
+      </p>
 
-        {/* Blue CTA */}
-        <button
-          type="button"
-          onClick={openFileDialog}
-          className="inline-block cursor-pointer rounded-md bg-[#2563eb] px-6 py-3 text-white font-semibold shadow hover:bg-[#1d4ed8] transition"
-        >
-          Click here to convert a PDF
-        </button>
-
-        {/* Preview / error */}
-        {file && (
-          <div className="text-sm text-black">
-            Selected: <strong>{file.name}</strong>{" "}
-            <span className="text-[#808191]">
-              ({Math.round(file.size / 1024)} KB)
-            </span>
-          </div>
-        )}
-        {error && <div className="text-sm text-red-600">{error}</div>}
-      </div>
+      <button
+        type="button"
+        className="rounded-md bg-blue-600 px-6 py-3 text-white font-semibold shadow hover:bg-blue-700 transition"
+      >
+        Click here to convert a PDF
+      </button>
     </div>
   );
 }
