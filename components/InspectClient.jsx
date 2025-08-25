@@ -2,8 +2,8 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import * as pdfjs from "pdfjs-dist";
-import "pdfjs-dist/build/pdf.worker.min.js";
+import { getDocument } from "pdfjs-dist";
+import "pdfjs-dist/build/pdf.worker.entry";
 
 // Narzędzia/typy zaznaczeń
 const Tool = {
@@ -14,9 +14,9 @@ const Tool = {
 
 // Palety kolorów dla typów (cyklicznie)
 const COLORS = {
-  table: ["#2563eb", "#1d4ed8", "#3b82f6"],   // niebieskie odcienie
+  table: ["#2563eb", "#1d4ed8", "#3b82f6"], // niebieskie odcienie
   column: ["#16a34a", "#22c55e", "#15803d"], // zielone
-  row: ["#d97706", "#f59e0b", "#b45309"],     // pomarańczowe
+  row: ["#d97706", "#f59e0b", "#b45309"], // pomarańczowe
 };
 
 // UI pomocnicze
@@ -87,7 +87,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const doc = await pdfjs.getDocument(pdfUrl).promise;
+      const doc = await getDocument(pdfUrl).promise;
       if (!mounted) return;
       setPdfDoc(doc);
       setPageCount(doc.numPages);
@@ -110,7 +110,9 @@ export default function InspectClient({ pdfUrl, uuid }) {
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
   }, [pdfDoc, pageNum, scale]);
 
-  useEffect(() => { renderPage().catch(console.error); }, [renderPage]);
+  useEffect(() => {
+    renderPage().catch(console.error);
+  }, [renderPage]);
 
   // ===== helpers dla aktualnej strony =====
   const current = selections[pageNum] || [];
@@ -124,8 +126,14 @@ export default function InspectClient({ pdfUrl, uuid }) {
   // ===== Toolbar =====
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
-  const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
-  const nextPage = () => { setActiveIndex(-1); setPageNum((n) => Math.min(pageCount, n + 1)); };
+  const prevPage = () => {
+    setActiveIndex(-1);
+    setPageNum((n) => Math.max(1, n - 1));
+  };
+  const nextPage = () => {
+    setActiveIndex(-1);
+    setPageNum((n) => Math.min(pageCount, n + 1));
+  };
 
   // ===== Kolor dla nowego zaznaczenia wg narzędzia =====
   const nextColorFor = (t) => {
@@ -176,7 +184,10 @@ export default function InspectClient({ pdfUrl, uuid }) {
         const ny = clamp(startRect.y + dy, 0, viewport.height - startRect.h);
         setCurrent((prev) => {
           const next = [...prev];
-          next[activeIndex] = { ...next[activeIndex], rect: toNorm(nx, ny, startRect.w, startRect.h, viewport.width, viewport.height) };
+          next[activeIndex] = {
+            ...next[activeIndex],
+            rect: toNorm(nx, ny, startRect.w, startRect.h, viewport.width, viewport.height),
+          };
           return next;
         });
       } else if (mode === "resize") {
@@ -204,7 +215,10 @@ export default function InspectClient({ pdfUrl, uuid }) {
 
         setCurrent((prev) => {
           const next = [...prev];
-          next[activeIndex] = { ...next[activeIndex], rect: toNorm(r.x, r.y, r.w, r.h, viewport.width, viewport.height) };
+          next[activeIndex] = {
+            ...next[activeIndex],
+            rect: toNorm(r.x, r.y, r.w, r.h, viewport.width, viewport.height),
+          };
           return next;
         });
       }
@@ -230,7 +244,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
     if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => {
-        // dla TABLE możesz chcieć 1 sztukę na stronę — wówczas wykomentuj filtr:
+        // dla TABLE możesz chcieć 1 sztukę na stronę — wtedy odfiltruj stare TABLE
         // const rest = prev.filter((s) => s.type !== Tool.TABLE);
         // return [...rest, { type: draft.type, color: draft.color, rect: norm }];
         return [...prev, { type: draft.type, color: draft.color, rect: norm }];
@@ -253,8 +267,6 @@ export default function InspectClient({ pdfUrl, uuid }) {
     const r = pxFromNorm(current[idx].rect);
     const size = 8;
     const inPt = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
-    const midX = r.x + r.w / 2;
-    const midY = r.y + r.h / 2;
 
     if (inPt(r.x, r.y)) return "tl";
     if (inPt(r.x + r.w, r.y)) return "tr";
@@ -303,7 +315,9 @@ export default function InspectClient({ pdfUrl, uuid }) {
     <div className="w-full">
       {/* Toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
+        <div className="text-sm px-2 py-1 border rounded">
+          Page {pageNum}/{pageCount}
+        </div>
 
         <div className="flex items-center gap-1">
           <button
@@ -331,10 +345,18 @@ export default function InspectClient({ pdfUrl, uuid }) {
 
         <span className="mx-1" />
 
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>[+] Zoom In</button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>[-] Zoom Out</button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>[&lt;] Previous Page</button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>[&gt;] Next Page</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>
+          [+] Zoom In
+        </button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>
+          [-] Zoom Out
+        </button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>
+          [&lt;] Previous Page
+        </button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>
+          [&gt;] Next Page
+        </button>
 
         {/* Legendka kolorów */}
         <div className="ml-auto flex items-center gap-3 text-sm">
@@ -424,10 +446,7 @@ export default function InspectClient({ pdfUrl, uuid }) {
 function Legend({ label, color }) {
   return (
     <div className="flex items-center gap-2">
-      <span
-        className="inline-block w-3 h-3 rounded"
-        style={{ background: color }}
-      />
+      <span className="inline-block w-3 h-3 rounded" style={{ background: color }} />
       <span>{label}</span>
     </div>
   );
