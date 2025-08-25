@@ -16,8 +16,7 @@ export function Header() {
   const [open, setOpen] = useState(false);
 
   return (
-    <header className="bg-white border-b border-gray-300 w-full">
-      {/* NAV WRAPPER */}
+    <header className="bg-white border-b border-gray-400 w-full">
       <nav className="flex max-w-7xl mx-auto items-center justify-between px-4 py-3 sm:px-6">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
@@ -69,7 +68,7 @@ export function Header() {
 
       {/* Mobile panel */}
       {open && (
-        <div className="md:hidden border-t border-gray-300">
+        <div className="md:hidden border-t border-gray-400">
           <ul className="max-w-7xl mx-auto px-4 py-3 space-y-2">
             {navItems.map((item) => (
               <li key={item.href}>

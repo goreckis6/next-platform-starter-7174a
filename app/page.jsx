@@ -99,19 +99,7 @@ export default function Page() {
         </Link>
       </section>
 
-      {/* FOOTER */}
-      <footer className="bg-white border-t py-8">
-        <nav className="flex flex-wrap justify-center gap-6 mb-4 text-sm text-gray-700">
-          <Link href="/api-docs">API Docs</Link>
-          <Link href="/about">About</Link>
-          <Link href="/terms">Terms</Link>
-          <Link href="/privacy">Privacy</Link>
-          <Link href="/blog">Blog</Link>
-        </nav>
-        <div className="text-center text-sm text-gray-500">
-          © {new Date().getFullYear()} Smart Statement
-        </div>
-      </footer>
+    
     </main>
   );
 }

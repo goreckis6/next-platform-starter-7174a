@@ -13,18 +13,21 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <head>
-        <link relName="icon" href="/favicon.svg" sizes="any" />
+        <link rel="icon" href="/favicon.svg" sizes="any" />
       </head>
-      {/* zmiana: białe tło + czarny tekst */}
       <body className="antialiased bg-white text-black">
-        {/* usuwamy bg-noise, zostawiamy neutralny wrapper */}
+        {/* HEADER na pełną szerokość */}
+        <Header />
+
+        {/* Treść strony w węższym kontenerze */}
         <div className="flex flex-col min-h-screen px-6 sm:px-12">
-          <div className="flex flex-col w-full max-w-5xl mx-auto grow">
-            <Header />
-            <main className="grow">{children}</main>
-            <Footer />
-          </div>
+          <main className="flex flex-col w-full max-w-5xl mx-auto grow">
+            {children}
+          </main>
         </div>
+
+        {/* FOOTER na pełną szerokość */}
+        <Footer />
       </body>
     </html>
   );
