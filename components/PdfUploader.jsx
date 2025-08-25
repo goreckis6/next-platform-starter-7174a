@@ -6,16 +6,28 @@ import InspectClient from "./InspectClient";
 
 export default function PdfUploader() {
   const [pdfUrl, setPdfUrl] = useState(null);
+  const [pdfData, setPdfData] = useState(null); // ArrayBuffer
 
-  const handleFile = (e) => {
+  const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.type !== "application/pdf") {
+
+    // akceptuj też przypadek, gdy mime nie jest ustawione
+    const isPdf =
+      file.type === "application/pdf" ||
+      file.name.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
       alert("Wybierz plik PDF.");
       return;
     }
+
+    // URL blob – działa często, ale nie wszędzie
     const url = URL.createObjectURL(file);
     setPdfUrl(url);
+
+    // ArrayBuffer – bardziej niezawodny dla pdfjs
+    const buf = await file.arrayBuffer();
+    setPdfData(buf);
   };
 
   return (
@@ -26,10 +38,18 @@ export default function PdfUploader() {
         onChange={handleFile}
         className="mb-4"
       />
-      {pdfUrl ? (
-        <InspectClient pdfUrl={pdfUrl} uuid="local" />
+
+      {pdfUrl || pdfData ? (
+        <InspectClient
+          key={pdfUrl || (pdfData && `buf-${(pdfData.byteLength || 0)}`)}
+          pdfUrl={pdfUrl}
+          pdfData={pdfData}
+          uuid="local"
+        />
       ) : (
-        <p className="text-gray-500">Wybierz plik PDF, aby zobaczyć podgląd.</p>
+        <p className="text-gray-500">
+          Wybierz plik PDF, aby zobaczyć podgląd.
+        </p>
       )}
     </div>
   );

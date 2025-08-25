@@ -23,7 +23,7 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// Uchywt do resize/move
+// Uchwyt do resize/move
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -48,7 +48,7 @@ const HandleDots = ({ r, active, onMouseDown }) =>
     </>
   ) : null;
 
-export default function InspectClient({ pdfUrl, uuid }) {
+export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -88,20 +88,32 @@ export default function InspectClient({ pdfUrl, uuid }) {
     };
   }, []);
 
-  // Ładowanie PDF
+  // Ładowanie PDF z url LUB z pdfData (Uint8Array)
   useEffect(() => {
     let mounted = true;
     (async () => {
-      const doc = await getDocument(pdfUrl).promise;
-      if (!mounted) return;
-      setPdfDoc(doc);
-      setPageCount(doc.numPages);
-      setPageNum(1);
-    })().catch(console.error);
+      if (!pdfUrl && !pdfData) return;
+      try {
+        const params = pdfData ? { data: pdfData } : { url: pdfUrl };
+        const doc = await getDocument(params).promise;
+        if (!mounted) return;
+        setPdfDoc(doc);
+        setPageCount(doc.numPages);
+        setPageNum(1);
+      } catch (err) {
+        console.error("PDF load error:", err);
+        if (mounted) {
+          setPdfDoc(null);
+          setPageCount(1);
+          setPageNum(1);
+          alert("Nie udało się wczytać PDF. Sprawdź plik i spróbuj ponownie.");
+        }
+      }
+    })();
     return () => {
       mounted = false;
     };
-  }, [pdfUrl]);
+  }, [pdfUrl, pdfData]);
 
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
