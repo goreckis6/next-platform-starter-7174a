@@ -17,7 +17,8 @@ export function Header() {
 
   return (
     <header className="bg-white border-b border-gray-300 w-full">
-      <nav className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6">
+      {/* NAV WRAPPER */}
+      <nav className="flex max-w-7xl mx-auto items-center justify-between px-4 py-3 sm:px-6">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
           <Image src={netlifyLogo} alt="Logo" width={120} height={40} priority />
@@ -69,7 +70,7 @@ export function Header() {
       {/* Mobile panel */}
       {open && (
         <div className="md:hidden border-t border-gray-300">
-          <ul className="mx-auto max-w-7xl px-4 py-3 space-y-2">
+          <ul className="max-w-7xl mx-auto px-4 py-3 space-y-2">
             {navItems.map((item) => (
               <li key={item.href}>
                 <Link
