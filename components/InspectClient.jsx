@@ -1,26 +1,17 @@
-jasne — poniżej masz **pełny**, działający `components/InspectClient.jsx`:
-
-* automatycznie wyciąga **tekst** spod zaznaczeń (table/column/row),
-* pokazuje wyniki w panelu po prawej,
-* przycisk **Export CSV** eksportuje wszystkie wartości (ze wszystkich stron, na których są zaznaczenia),
-* solidny init workera PDF.js (fallbacki), ładowanie z `Uint8Array` **albo** `URL`.
-
-Wklej 1:1.
-
 ```jsx
 // components/InspectClient.jsx
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-// Typy narzędzi
+// Tool types
 const Tool = {
   TABLE: "table",
   COLUMN: "column",
   ROW: "row",
 };
 
-// Kolory per typ (rotowane)
+// Colors per tool (rotated)
 const COLORS = {
   table: ["#2563eb", "#1d4ed8", "#3b82f6"],
   column: ["#16a34a", "#22c55e", "#15803d"],
@@ -32,7 +23,7 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// Uchwyt do resize/move
+// Resize/move handles
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -69,10 +60,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [error, setError] = useState(null);
 
-  // Cache tekstu per strona: page -> items
+  // Text cache per page: page -> items
   const [textCache, setTextCache] = useState({});
 
-  // selections[page] = [{ type, color, rect (norm) }]
+  // selections[page] = [{ type, color, rect (normalized) }]
   const [selections, setSelections] = useState({});
   const [tool, setTool] = useState(Tool.TABLE);
   const colorIndexRef = useRef({ table: 0, column: 0, row: 0 });
@@ -81,10 +72,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // Wyniki auto-ekstrakcji: values[page] = [{index,type,text}]
+  // Auto-extracted values: values[page] = [{index,type,text}]
   const [values, setValues] = useState({});
 
-  // 1) Inicjalizacja PDF.js — tylko w przeglądarce, z fallbackiem workera
+  // 1) Init PDF.js in browser with worker fallbacks
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -111,12 +102,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         if (workerUrl) {
           lib.GlobalWorkerOptions.workerSrc = workerUrl;
         } else {
-          console.warn("[pdfjs] running without dedicated worker — may be slow");
+          console.warn("[pdfjs] running without dedicated worker");
         }
         if (mounted) setPdfjs(lib);
       } catch (e) {
         console.error("[pdfjs] init failed:", e);
-        if (mounted) setError("Nie udało się zainicjalizować PDF.js");
+        if (mounted) setError("Nie udalo sie zainicjalizowac PDF.js");
       }
     })();
     return () => {
@@ -124,11 +115,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     };
   }, []);
 
-  // 2) Ładowanie dokumentu z url LUB z pdfData (Uint8Array)
+  // 2) Load document from url OR pdfData (Uint8Array)
   useEffect(() => {
     let mounted = true;
     (async () => {
-      if (!pdfjs) return; // czekamy na PDF.js
+      if (!pdfjs) return; // wait for PDF.js
       if (!pdfUrl && !pdfData) return;
 
       setError(null);
@@ -146,7 +137,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       } catch (err) {
         console.error("PDF load error:", err);
         if (!mounted) return;
-        const msg = err?.message || (typeof err === "string" ? err : "Nieznany błąd podczas wczytywania PDF");
+        const msg = err?.message || (typeof err === "string" ? err : "Unknown PDF load error");
         setError(msg);
         setPdfDoc(null);
         setPageCount(1);
@@ -158,7 +149,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     };
   }, [pdfUrl, pdfData, pdfjs]);
 
-  // 3) Render strony + cache textContent
+  // 3) Render page + cache textContent
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -180,7 +171,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     renderPage().catch((e) => console.error("Render error:", e));
   }, [renderPage]);
 
-  // Helpers – aktualna strona
+  // Current page helpers
   const current = selections[pageNum] || [];
   const setCurrent = (updater) =>
     setSelections((prev) => {
@@ -201,7 +192,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     setPageNum((n) => Math.min(pageCount, n + 1));
   };
 
-  // Kolor dla nowego zaznaczenia wg narzędzia
+  // Color for new selection by tool
   const nextColorFor = (t) => {
     const list = COLORS[t];
     const i = colorIndexRef.current[t] % list.length;
@@ -209,7 +200,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return list[i];
   };
 
-  // --- Rysowanie / edycja ---
+  // Drawing / editing
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
 
   const hitTestBox = (x, y) => {
@@ -349,7 +340,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     setActiveIndex(hitTestBox(x, y));
   };
 
-  // Klawiatura
+  // Keyboard
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -370,7 +361,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // ====== AUTO-EXTRACT: przelicz wartości, kiedy zmieniają się selekcje/tekst/viewport ======
+  // Auto extract: recompute values when selections/text/viewport change
   const extractTextsForPage = useCallback(
     (page) => {
       const pageSelections = selections[page] || [];
@@ -381,12 +372,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         const r = fromNorm(sel.rect, viewport.width, viewport.height);
         const texts = items
           .map((it) => {
-            // transform: [a,b,c,d,e,f]  |  e=tx (x), f=ty (baseline y)
-            const [a, b, c, d, e, f] = it.transform || [];
+            // transform: [a,b,c,d,e,f]  with e=tx (x), f=ty (baseline y)
+            const [, , , , e, f] = it.transform || [];
             const w = it.width || 0;
             const h = it.height || 0;
             const x = e ?? 0;
-            const y = (f ?? 0) - h; // górny lewy róg
+            const y = (f ?? 0) - h; // top-left
             const inside =
               x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
             return inside ? it.str : null;
@@ -399,7 +390,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     [selections, textCache, viewport.width, viewport.height]
   );
 
-  // Liczymy wartości dla stron, które mają cache tekstu
+  // Recompute values for pages that have text cache
   useEffect(() => {
     if (!pdfDoc) return;
     const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
@@ -416,11 +407,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
   const currentValues = values[pageNum] || [];
 
-  // Export → CSV (wartości tekstowe ze wszystkich stron z zaznaczeniami)
+  // Export CSV of values (all pages with selections)
   const handleExportCSV = async () => {
     if (!pdfDoc) return;
 
-    // Strony z selekcjami
     const pages = Object.keys(selections)
       .map((k) => parseInt(k, 10))
       .filter((p) => (selections[p] || []).length > 0)
@@ -435,7 +425,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       const page = await pdfDoc.getPage(p);
       const vp = page.getViewport({ scale });
 
-      // tekst z cache albo dociągnij
+      // text from cache or load it
       let items = textCache[p];
       if (!items) {
         const txt = await page.getTextContent();
@@ -446,11 +436,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         const r = fromNorm(sel.rect, vp.width, vp.height);
         const texts = items
           .map((it) => {
-            const [a, b, c, d, e, f] = it.transform || [];
+            const [, , , , e, f] = it.transform || [];
             const w = it.width || 0;
             const h = it.height || 0;
             const x = e ?? 0;
-            const y = (f ?? 0) - h; // górny lewy róg
+            const y = (f ?? 0) - h;
             const inside =
               x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
             return inside ? it.str : null;
@@ -461,7 +451,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       });
     }
 
-    // zapisz CSV
     const csv = rows
       .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
       .join("\n");
@@ -514,7 +503,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>&lt; Prev</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>Next &gt;</button>
 
-        {/* Legendka */}
+        {/* Legend */}
         <div className="ml-auto flex items-center gap-3 text-sm">
           <Legend label="Table" color={COLORS.table[0]} />
           <Legend label="Column" color={COLORS.column[0]} />
@@ -526,7 +515,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           <button
             onClick={handleExportCSV}
             className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700"
-            title="Export current values to CSV"
+            title="Export values to CSV"
           >
             Export CSV
           </button>
@@ -549,11 +538,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           {/* Error overlay */}
           {error && (
             <div className="absolute left-0 top-0 w-full p-3 bg-red-50 text-red-800 text-sm border border-red-200">
-              Nie udało się wczytać PDF: <span className="font-mono">{String(error)}</span>
+              Nie udalo sie wczytac PDF: <span className="font-mono">{String(error)}</span>
             </div>
           )}
 
-          {/* Istniejące zaznaczenia */}
+          {/* Existing selections */}
           {viewport.width > 0 &&
             current.map((s, i) => {
               const r = fromNorm(s.rect, viewport.width, viewport.height);
@@ -614,11 +603,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           )}
         </div>
 
-        {/* Panel wyników (auto-aktualizacja) */}
+        {/* Results panel (auto updates) */}
         <div className="border rounded-lg p-3 bg-white/60">
           <div className="font-semibold mb-2">Wyniki (strona {pageNum})</div>
           {currentValues.length === 0 ? (
-            <div className="text-sm text-gray-500">Brak zaznaczeń na tej stronie.</div>
+            <div className="text-sm text-gray-500">Brak zaznaczen na tej stronie.</div>
           ) : (
             <ul className="space-y-2">
               {currentValues.map((row) => (
@@ -630,7 +619,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
                     {row.type}
                   </span>
                   <span className="align-middle break-words">
-                    {row.text || <em className="text-gray-500">—</em>}
+                    {row.text || <em className="text-gray-500">-</em>}
                   </span>
                 </li>
               ))}
@@ -656,3 +645,4 @@ function Legend({ label, color }) {
     </div>
   );
 }
+```
