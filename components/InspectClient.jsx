@@ -1,7 +1,17 @@
+jasne — poniżej masz **pełny**, działający `components/InspectClient.jsx`:
+
+* automatycznie wyciąga **tekst** spod zaznaczeń (table/column/row),
+* pokazuje wyniki w panelu po prawej,
+* przycisk **Export CSV** eksportuje wszystkie wartości (ze wszystkich stron, na których są zaznaczenia),
+* solidny init workera PDF.js (fallbacki), ładowanie z `Uint8Array` **albo** `URL`.
+
+Wklej 1:1.
+
+```jsx
 // components/InspectClient.jsx
 "use client";
 
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 
 // Typy narzędzi
 const Tool = {
@@ -71,8 +81,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // Wyniki automatycznego wyciągania tekstu: values[page] = [{index,type,text}]
-  const [values, setValues] = useState({}); // { [page: number]: Array<{index:number,type:string,text:string}> }
+  // Wyniki auto-ekstrakcji: values[page] = [{index,type,text}]
+  const [values, setValues] = useState({});
 
   // 1) Inicjalizacja PDF.js — tylko w przeglądarce, z fallbackiem workera
   useEffect(() => {
@@ -389,7 +399,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     [selections, textCache, viewport.width, viewport.height]
   );
 
-  // Liczymy wartości dla bieżącej strony + każdej, której cache tekstu już mamy
+  // Liczymy wartości dla stron, które mają cache tekstu
   useEffect(() => {
     if (!pdfDoc) return;
     const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
@@ -405,6 +415,67 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, extractTextsForPage]);
 
   const currentValues = values[pageNum] || [];
+
+  // Export → CSV (wartości tekstowe ze wszystkich stron z zaznaczeniami)
+  const handleExportCSV = async () => {
+    if (!pdfDoc) return;
+
+    // Strony z selekcjami
+    const pages = Object.keys(selections)
+      .map((k) => parseInt(k, 10))
+      .filter((p) => (selections[p] || []).length > 0)
+      .sort((a, b) => a - b);
+
+    const rows = [["page", "index", "type", "text"]];
+
+    for (const p of pages) {
+      const pageSelections = selections[p] || [];
+      if (pageSelections.length === 0) continue;
+
+      const page = await pdfDoc.getPage(p);
+      const vp = page.getViewport({ scale });
+
+      // tekst z cache albo dociągnij
+      let items = textCache[p];
+      if (!items) {
+        const txt = await page.getTextContent();
+        items = txt.items;
+      }
+
+      pageSelections.forEach((sel, i) => {
+        const r = fromNorm(sel.rect, vp.width, vp.height);
+        const texts = items
+          .map((it) => {
+            const [a, b, c, d, e, f] = it.transform || [];
+            const w = it.width || 0;
+            const h = it.height || 0;
+            const x = e ?? 0;
+            const y = (f ?? 0) - h; // górny lewy róg
+            const inside =
+              x >= r.x && y >= r.y && x + w <= r.x + r.w && y + h <= r.y + r.h;
+            return inside ? it.str : null;
+          })
+          .filter(Boolean);
+
+        rows.push([p, i, sel.type, texts.join(" ")]);
+      });
+    }
+
+    // zapisz CSV
+    const csv = rows
+      .map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `values-${uuid || "file"}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="w-full">
@@ -448,6 +519,17 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
           <Legend label="Table" color={COLORS.table[0]} />
           <Legend label="Column" color={COLORS.column[0]} />
           <Legend label="Row" color={COLORS.row[0]} />
+        </div>
+
+        {/* Export CSV */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportCSV}
+            className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700"
+            title="Export current values to CSV"
+          >
+            Export CSV
+          </button>
         </div>
       </div>
 
@@ -541,11 +623,15 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
             <ul className="space-y-2">
               {currentValues.map((row) => (
                 <li key={row.index} className="text-sm">
-                  <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
-                        style={{ background: chipColor(row.type) }}>
+                  <span
+                    className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
+                    style={{ background: chipColor(row.type) }}
+                  >
                     {row.type}
                   </span>
-                  <span className="align-middle break-words">{row.text || <em className="text-gray-500">—</em>}</span>
+                  <span className="align-middle break-words">
+                    {row.text || <em className="text-gray-500">—</em>}
+                  </span>
                 </li>
               ))}
             </ul>
