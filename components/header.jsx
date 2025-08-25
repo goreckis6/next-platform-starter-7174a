@@ -16,8 +16,10 @@ export function Header() {
   const [open, setOpen] = useState(false);
 
   return (
-    <header className="bg-white border-b border-gray-400 w-full">
-      <nav className="flex max-w-7xl mx-auto items-center justify-between px-4 py-3 sm:px-6">
+    // Pełna szerokość + szara linia
+    <header className="bg-white border-b border-gray-300 w-full">
+      {/* Wewnętrzny kontener zachowuje wcześniejsze położenie treści */}
+      <nav className="flex items-center justify-between max-w-5xl mx-auto px-6 sm:px-12 py-3">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2">
           <Image src={netlifyLogo} alt="Logo" width={120} height={40} priority />
@@ -27,10 +29,7 @@ export function Header() {
         <ul className="hidden md:flex items-center gap-6 text-gray-700 font-medium">
           {navItems.map((item) => (
             <li key={item.href}>
-              <Link
-                href={item.href}
-                className="hover:text-blue-600 transition-colors"
-              >
+              <Link href={item.href} className="hover:text-blue-600 transition-colors">
                 {item.linkText}
               </Link>
             </li>
@@ -47,29 +46,17 @@ export function Header() {
         >
           <span className="sr-only">Toggle menu</span>
           <div className="relative h-5 w-6">
-            <span
-              className={`absolute left-0 top-0 block h-0.5 w-6 bg-current transition-transform ${
-                open ? "translate-y-2 rotate-45" : ""
-              }`}
-            />
-            <span
-              className={`absolute left-0 top-2 block h-0.5 w-6 bg-current transition-opacity ${
-                open ? "opacity-0" : "opacity-100"
-              }`}
-            />
-            <span
-              className={`absolute left-0 top-4 block h-0.5 w-6 bg-current transition-transform ${
-                open ? "-translate-y-2 -rotate-45" : ""
-              }`}
-            />
+            <span className={`absolute left-0 top-0 block h-0.5 w-6 bg-current transition-transform ${open ? "translate-y-2 rotate-45" : ""}`} />
+            <span className={`absolute left-0 top-2 block h-0.5 w-6 bg-current transition-opacity ${open ? "opacity-0" : "opacity-100"}`} />
+            <span className={`absolute left-0 top-4 block h-0.5 w-6 bg-current transition-transform ${open ? "-translate-y-2 -rotate-45" : ""}`} />
           </div>
         </button>
       </nav>
 
-      {/* Mobile panel */}
+      {/* Mobile panel – ta sama szerokość i padding co treść */}
       {open && (
-        <div className="md:hidden border-t border-gray-400">
-          <ul className="max-w-7xl mx-auto px-4 py-3 space-y-2">
+        <div className="md:hidden border-t border-gray-300">
+          <ul className="max-w-5xl mx-auto px-6 sm:px-12 py-3 space-y-2">
             {navItems.map((item) => (
               <li key={item.href}>
                 <Link
