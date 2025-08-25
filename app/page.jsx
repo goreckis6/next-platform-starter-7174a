@@ -38,13 +38,12 @@ export default function Page() {
       <section className="max-w-5xl mx-auto px-6 sm:px-12 mb-16">
         <DropZone />
       </section>
-
-      {/* FEATURES (3 równe boxy) */}
+      {/* FEATURES (3 równe boxy, bez obramowań) */}
       <section className="bg-white">
         <div className="max-w-5xl mx-auto px-6 sm:px-12">
           <div className="grid gap-8 md:grid-cols-3 items-stretch">
             {/* Secure */}
-            <div className="p-6 border rounded-lg shadow-sm bg-white flex flex-col h-full">
+            <div className="p-6 bg-white flex flex-col h-full">
               <ShieldCheckIcon className="h-10 w-10 text-blue-600 mb-4" />
               <h3 className="text-xl font-semibold mb-2">Secure</h3>
               <p className="text-gray-800">
@@ -54,7 +53,7 @@ export default function Page() {
             </div>
 
             {/* Institutional */}
-            <div className="p-6 border rounded-lg shadow-sm bg-white flex flex-col h-full">
+            <div className="p-6 bg-white flex flex-col h-full">
               <BuildingOffice2Icon className="h-10 w-10 text-blue-600 mb-4" />
               <h3 className="text-xl font-semibold mb-2">Institutional</h3>
               <p className="text-gray-800">
@@ -64,7 +63,7 @@ export default function Page() {
             </div>
 
             {/* Accurate */}
-            <div className="p-6 border rounded-lg shadow-sm bg-white flex flex-col h-full">
+            <div className="p-6 bg-white flex flex-col h-full">
               <CheckBadgeIcon className="h-10 w-10 text-blue-600 mb-4" />
               <h3 className="text-xl font-semibold mb-2">Accurate</h3>
               <p className="text-gray-800">
@@ -76,13 +75,15 @@ export default function Page() {
         </div>
       </section>
 
-      {/* TIERS (zachowane zgodnie z Twoją treścią) */}
+          {/* TIERS */}
       <section className="bg-white py-16 px-6">
         <div className="grid gap-8 md:grid-cols-3 max-w-5xl mx-auto">
           {/* Anonymous */}
-          <div className="p-6 border rounded-lg text-center shadow-sm bg-white flex flex-col">
+          <div className="p-6 border border-gray-300 rounded-lg text-center bg-white flex flex-col">
             <h2 className="text-2xl font-bold mb-2">Anonymous</h2>
-            <p className="text-gray-700 mb-4">Anonymous conversions with no need to sign up</p>
+            <p className="text-gray-700 mb-4">
+              Anonymous conversions with no need to sign up
+            </p>
             <ul className="mb-4">
               <li>1 page every 24 hours</li>
             </ul>
@@ -96,7 +97,7 @@ export default function Page() {
           </div>
 
           {/* Registered */}
-          <div className="p-6 border rounded-lg text-center shadow-sm bg-white flex flex-col">
+          <div className="p-6 border border-gray-300 rounded-lg text-center bg-white flex flex-col">
             <h2 className="text-2xl font-bold mb-2">Registered</h2>
             <p className="text-gray-700 mb-4">Registration is free</p>
             <ul className="mb-4">
@@ -112,9 +113,11 @@ export default function Page() {
           </div>
 
           {/* Subscribe */}
-          <div className="p-6 border rounded-lg text-center shadow-sm bg-white flex flex-col">
+          <div className="p-6 border border-gray-300 rounded-lg text-center bg-white flex flex-col">
             <h2 className="text-2xl font-bold mb-2">Subscribe</h2>
-            <p className="text-gray-700 mb-4">Subscribe to convert more documents</p>
+            <p className="text-gray-700 mb-4">
+              Subscribe to convert more documents
+            </p>
             <ul className="mb-4">
               <li>Starter / Professional / Business plans</li>
             </ul>
