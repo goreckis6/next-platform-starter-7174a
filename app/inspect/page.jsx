@@ -5,6 +5,7 @@ export const revalidate = 0;
 import Link from "next/link";
 import { headers } from "next/headers";
 import InspectClient from "../../components/InspectClient";
+import PdfUploader from "@/components/PdfUploader";
 
 async function fetchMeta(uuid) {
   // 1) spróbuj z env
@@ -35,31 +36,58 @@ export default async function InspectPage({ searchParams }) {
   const message = searchParams?.message || "";
   const env = searchParams?.env || "prod";
 
+  // === Tryb bez uuid: lokalny upload ===
   if (!uuid) {
     return (
-      <main className="max-w-5xl mx-auto px-6 sm:px-12 py-10">
-        <h1 className="text-3xl font-bold mb-4">Inspect</h1>
-        <p className="text-red-600">Missing <code>uuid</code> in query.</p>
+      <main className="max-w-7xl mx-auto px-6 sm:px-12 py-8">
+        <div className="mb-4 flex items-center justify-between">
+          <h1 className="text-2xl font-bold">Inspect: local PDF</h1>
+        </div>
+
+        {message && (
+          <div className="mb-4 rounded-md border border-yellow-300 bg-yellow-50 p-3 text-yellow-900">
+            {message}
+          </div>
+        )}
+
+        {/* Interaktywny viewer/edytor (z możliwością wgrania lokalnego PDF) */}
+        <PdfUploader />
+
+        <div className="mt-8 text-sm text-gray-500">
+          env: <span className="font-mono">{env}</span>
+        </div>
       </main>
     );
   }
 
+  // === Tryb z uuid: plik z backendu + opcja lokalnego uploadu ===
   let meta;
   try {
     meta = await fetchMeta(uuid);
   } catch (e) {
+    // Gdy błąd backendu — pokaż komunikat i daj fallback na lokalny upload
     return (
-      <main className="max-w-5xl mx-auto px-6 sm:px-12 py-10">
-        <h1 className="text-3xl font-bold mb-4">Inspect</h1>
+      <main className="max-w-7xl mx-auto px-6 sm:px-12 py-8">
+        <h1 className="text-2xl font-bold mb-4">Inspect</h1>
         <p className="text-red-600">{String(e.message || e)}</p>
         <p className="mt-2 text-sm text-gray-600">
-          Tip: możesz ustawić <code>NEXT_PUBLIC_SITE_URL</code> w Netlify (np. <code>https://twoja-domena.netlify.app</code>),
-          ale nie jest to wymagane — powyższa wersja i tak działa bez tego.
+          Tip: możesz ustawić <code>NEXT_PUBLIC_SITE_URL</code> w Netlify (np.{" "}
+          <code>https://twoja-domena.netlify.app</code>), ale strona działa też bez tego.
         </p>
+
+        <div className="mt-6">
+          <h2 className="text-lg font-semibold mb-2">Albo wgraj lokalny PDF:</h2>
+          <PdfUploader />
+        </div>
+
+        <div className="mt-8 text-sm text-gray-500">
+          env: <span className="font-mono">{env}</span>
+        </div>
       </main>
     );
   }
 
+  // OK — mamy meta z backendu
   return (
     <main className="max-w-7xl mx-auto px-6 sm:px-12 py-8">
       <div className="mb-4 flex items-center justify-between">
@@ -79,8 +107,17 @@ export default async function InspectPage({ searchParams }) {
         </div>
       )}
 
-      {/* Interaktywny viewer/edytor (z przyciskiem Convert w środku) */}
-      <InspectClient pdfUrl={meta.viewUrl} uuid={meta.uuid} />
+      {/* Podgląd pliku z backendu */}
+      <div className="mb-10">
+        <InspectClient pdfUrl={meta.viewUrl} uuid={meta.uuid} />
+      </div>
+
+      {/* Alternatywnie: lokalny upload */}
+      <div className="border-t pt-6">
+        <h2 className="text-lg font-semibold mb-2">…albo wgraj inny PDF z dysku:</h2>
+        <PdfUploader />
+      </div>
+
       <div className="mt-8 text-sm text-gray-500">
         env: <span className="font-mono">{env}</span>
       </div>
