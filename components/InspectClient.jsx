@@ -101,7 +101,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [autoBuild, setAutoBuild] = useState(true);
   const [smartDetect, setSmartDetect] = useState(true);
 
-  // kolumny auto (działają w tle, ale nie pokazujemy w UI)
   const autoCols = true;
   const maxCols = 6;
 
@@ -130,7 +129,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     "Sender/Receiver Name",
     "Source Statement Page",
   ];
-  const [selectedCols, setSelectedCols] = useState(new Set(TRANSACTION_COLUMNS)); // domyślnie wszystkie
+
+  // DOMYŚLNE: Date, Description, Debit, Balance
+  const [selectedCols, setSelectedCols] = useState(new Set(["Date", "Description", "Debit", "Balance"]));
+
+  // Mapowanie wierszy -> kolumny (heurystyka)
+  const [mapDetectedRows, setMapDetectedRows] = useState(true);
+
   const toggleCol = (label) =>
     setSelectedCols((prev) => {
       const n = new Set(prev);
@@ -364,7 +369,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     let labels = new Array(xs.length).fill(0);
 
     for (let iter = 0; iter < maxIter; iter++) {
-      // assign
       for (let i = 0; i < xs.length; i++) {
         let best = 0, bestd = Infinity;
         for (let c = 0; c < k; c++) {
@@ -373,20 +377,15 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         }
         labels[i] = best;
       }
-      // recompute
       const sums = new Array(k).fill(0);
       const counts = new Array(k).fill(0);
       for (let i = 0; i < xs.length; i++) { sums[labels[i]] += xs[i]; counts[labels[i]]++; }
       const newC = centroids.slice();
-      for (let c = 0; c < k; c++) {
-        if (counts[c] === 0) newC[c] = min + Math.random() * (max - min);
-        else newC[c] = sums[c] / counts[c];
-      }
+      for (let c = 0; c < k; c++) newC[c] = counts[c] === 0 ? min + Math.random() * (max - min) : sums[c] / counts[c];
       const shift = newC.reduce((s, v, i) => s + Math.abs(v - centroids[i]), 0) / k;
       centroids = newC;
       if (shift < 1e-3) break;
     }
-    // sort centroids ascending and relabel
     const order = centroids.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]).map(([_, i]) => i);
     const centSorted = order.map((oi) => centroids[oi]);
     const mapOldToNew = new Map(order.map((oi, newi) => [oi, newi]));
@@ -394,139 +393,98 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return { centroids: centSorted, labels: labelsSorted };
   }
   function mean(arr) { return arr.reduce((s, v) => s + v, 0) / Math.max(1, arr.length); }
-  function stddev(arr) {
-    if (!arr.length) return 0;
-    const m = mean(arr);
-    return Math.sqrt(arr.reduce((s, v) => s + (v - m) * (v - m), 0) / arr.length);
-  }
+  function stddev(arr) { if (!arr.length) return 0; const m = mean(arr); return Math.sqrt(arr.reduce((s, v) => s + (v - m) * (v - m), 0) / arr.length); }
 
   // ---------- SMART DETECT (auto cols 2..maxCols) ----------
   const inferGrid = useCallback((tableRect, boxes) => {
-    // pick words inside table
     let words = boxes.filter((bx) => {
       const cx = bx.x + bx.w / 2, cy = bx.y + bx.h / 2;
       return pointInRect(cx, cy, tableRect);
     });
-    // remove dotted noise
     const noiseRe = /^[\s.\-–—·•]+$/u;
     words = words.filter(w => !noiseRe.test((w.it?.str || "").trim()));
     if (words.length < 2) return { rows: [tableRect], cols: [tableRect] };
 
     const avgH = words.reduce((s, w) => s + w.h, 0) / words.length;
-    const avgW = words.reduce((s, w) => s + w.w, 0) / words.length;
     const rowTh = Math.max(6, avgH * 0.7);
     const longLineChars = 60;
     const longLineTokens = 12;
 
-    // helper: cluster rows by Y
-    const clusterRows = (items, yPadTop = 0.6, yPadBottom = 0.6) => {
-      const yItems = items.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "", xmid: w.x + w.w / 2 }));
-      yItems.sort((a, b) => a.y - b.y);
-      const clusters = [];
-      for (const it of yItems) {
-        const last = clusters[clusters.length - 1];
-        if (!last) clusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
-        else {
-          const meanY = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
-          if (Math.abs(it.y - meanY) <= rowTh) {
-            last.yMin = Math.min(last.yMin, it.y0);
-            last.yMax = Math.max(last.yMax, it.y1);
-            last.ys.push(it.y);
-            last.items.push(it);
-          } else {
-            clusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
-          }
+    const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "" }));
+    yItems.sort((a, b) => a.y - b.y);
+    const rowClusters = [];
+    for (const it of yItems) {
+      const last = rowClusters[rowClusters.length - 1];
+      if (!last) rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
+      else {
+        const meanY = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
+        if (Math.abs(it.y - meanY) <= rowTh) {
+          last.yMin = Math.min(last.yMin, it.y0);
+          last.yMax = Math.max(last.yMax, it.y1);
+          last.ys.push(it.y);
+          last.items.push(it);
+        } else {
+          rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
         }
       }
-      if (clusters.length) {
-        const kMin = Math.min(...clusters.map(k => k.yMin));
-        const kMax = Math.max(...clusters.map(k => k.yMax));
-        const clipY0 = Math.max(tableRect.y, kMin - avgH * yPadTop);
-        const clipY1 = Math.min(tableRect.y + tableRect.h, kMax + avgH * yPadBottom);
-        return {
-          rows: clusters.map(c => ({
-            x: tableRect.x,
-            y: Math.max(clipY0, c.yMin),
-            w: tableRect.w,
-            h: Math.min(clipY1, c.yMax) - Math.max(clipY0, c.yMin),
-          })).filter(r => r.h > 2),
-          clipY0, clipY1
-        };
-      }
-      return { rows: [], clipY0: tableRect.y, clipY1: tableRect.y + tableRect.h };
-    };
+    }
+    const rows = rowClusters
+      .filter(c => (c.items.map(i => i.str).join(" ").trim().length <= longLineChars))
+      .map(c => ({
+        x: tableRect.x,
+        y: Math.max(tableRect.y, c.yMin),
+        w: tableRect.w,
+        h: Math.min(tableRect.y + tableRect.h, c.yMax) - Math.max(tableRect.y, c.yMin),
+      }))
+      .filter(r => r.h > 2);
 
-    // Auto-detect columns (K in [2..maxCols])
-    if (autoCols) {
-      const xm = words.map(w => w.x + w.w / 2);
-      const xs = xm.slice().sort((a, b) => a - b);
-
-      let best = { k: 1, score: -Infinity, labels: null, centroids: null };
-      const KMAX = Math.max(2, Math.min(maxCols | 0, 12));
-      for (let k = 2; k <= KMAX; k++) {
-        const { centroids, labels } = kmeans1D(xs, k);
-        const inter = centroids.length > 1
-          ? centroids.slice(1).reduce((s, c, i) => s + (c - centroids[i]), 0) / (centroids.length - 1)
-          : 0;
-        const clusterBuckets = Array.from({ length: k }, () => []);
-        xs.forEach((v, i) => clusterBuckets[labels[i]].push(v));
-        const intra = clusterBuckets.reduce((s, arr) => s + stddev(arr), 0) / k;
-        const tinyPenalty = clusterBuckets.filter(arr => arr.length < 3).length * 5;
-        const score = inter - intra - tinyPenalty;
-        if (score > best.score) best = { k, score, labels, centroids };
-      }
-
-      // map words -> nearest centroid
-      const cents = best.centroids;
-      const wordLabels = words.map(w => {
-        const xmid = w.x + w.w / 2;
-        let besti = 0, bestd = Infinity;
-        for (let i = 0; i < cents.length; i++) {
-          const d = Math.abs(xmid - cents[i]);
-          if (d < bestd) { bestd = d; besti = i; }
-        }
-        return besti;
-      });
-
-      // columns rects
-      const byCol = Array.from({ length: best.k }, () => []);
-      words.forEach((w, i) => byCol[wordLabels[i]].push(w));
-      let cols = [];
-      for (let ci = 0; ci < byCol.length; ci++) {
-        const pts = byCol[ci];
-        if (!pts.length) continue;
-        const x0 = Math.min(...pts.map(p => p.x));
-        const x1 = Math.max(...pts.map(p => p.x + p.w));
-        cols.push({
-          x: Math.max(tableRect.x, x0),
-          y: tableRect.y,
-          w: Math.max(8, Math.min(tableRect.x + tableRect.w, x1) - Math.max(tableRect.x, x0)),
-          h: tableRect.h,
-        });
-      }
-      cols.sort((a, b) => a.x - b.x);
-      if (!cols.length) cols = [tableRect];
-
-      // rows (cluster Y) + filter long paragraphs
-      const { rows: rawRows, clipY0, clipY1 } = clusterRows(words);
-      const rows = rawRows
-        .map(r => {
-          const lineText = words
-            .filter(w => w.y >= r.y - EPS && w.y + w.h <= r.y + r.h + EPS)
-            .map(w => (w.it?.str || "").trim()).join(" ");
-          const tokenCount = lineText.split(/\s+/).filter(Boolean).length;
-          return (lineText.length > longLineChars || tokenCount > longLineTokens) ? null : r;
-        })
-        .filter(Boolean);
-
-      // clip columns vertically
-      cols = cols.map(c => ({ ...c, y: clipY0, h: clipY1 - clipY0 }));
-      return { rows: rows.length ? rows : [tableRect], cols };
+    // columns K=2..maxCols
+    const xm = words.map(w => w.x + w.w / 2).sort((a, b) => a - b);
+    let best = { k: 1, score: -Infinity, labels: null, centroids: null };
+    const KMAX = Math.max(2, Math.min(maxCols | 0, 12));
+    for (let k = 2; k <= KMAX; k++) {
+      const { centroids, labels } = kmeans1D(xm, k);
+      const inter = centroids.length > 1
+        ? centroids.slice(1).reduce((s, c, i) => s + (c - centroids[i]), 0) / (centroids.length - 1)
+        : 0;
+      const buckets = Array.from({ length: k }, () => []);
+      xm.forEach((v, i) => buckets[labels[i]].push(v));
+      const intra = buckets.reduce((s, arr) => s + stddev(arr), 0) / k;
+      const tinyPenalty = buckets.filter(arr => arr.length < 3).length * 5;
+      const score = inter - intra - tinyPenalty;
+      if (score > best.score) best = { k, score, labels, centroids };
     }
 
-    // fallback: whole rect
-    return { rows: [tableRect], cols: [tableRect] };
-  }, [autoCols, maxCols]);
+    const cents = best.centroids;
+    const wordLabels = words.map(w => {
+      const xmid = w.x + w.w / 2;
+      let besti = 0, bestd = Infinity;
+      for (let i = 0; i < cents.length; i++) {
+        const d = Math.abs(xmid - cents[i]);
+        if (d < bestd) { bestd = d; besti = i; }
+      }
+      return besti;
+    });
+    const byCol = Array.from({ length: best.k }, () => []);
+    words.forEach((w, i) => byCol[wordLabels[i]].push(w));
+    let cols = [];
+    for (let ci = 0; ci < byCol.length; ci++) {
+      const pts = byCol[ci];
+      if (!pts.length) continue;
+      const x0 = Math.min(...pts.map(p => p.x));
+      const x1 = Math.max(...pts.map(p => p.x + p.w));
+      cols.push({
+        x: Math.max(tableRect.x, x0),
+        y: tableRect.y,
+        w: Math.max(8, Math.min(tableRect.x + tableRect.w, x1) - Math.max(tableRect.x, x0)),
+        h: tableRect.h,
+      });
+    }
+    cols.sort((a, b) => a.x - b.x);
+    if (!cols.length) cols = [tableRect];
+
+    return { rows: rows.length ? rows : [tableRect], cols };
+  }, [maxCols]);
 
   // build tables (autoBuild/manual/smartDetect)
   const buildTablesForPage = useCallback((page) => {
@@ -623,7 +581,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return { tables: baseTables, loose };
   }, [selections, viewport.width, viewport.height, autoBuild, smartDetect, manualLinks, getTextBoxesForPage, inferGrid]);
 
-  // text to cells
+  // text -> cells
   useEffect(() => {
     if (!pdfDoc) return;
     const pages = Object.keys(textCache).map((k) => +k);
@@ -681,7 +639,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
-  // CSV/XLSX
+  // ===== CSV/XLSX helpers =====
   function buildCSV(rows) {
     return rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   }
@@ -717,21 +675,153 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     } catch (e) {
       console.error(e);
       alert("XLSX export failed (library load). Falling back to CSV.");
-      await handleExportCSV();
+      const rowsCSV = collectOrderedRows(true);
+      const csv = buildCSV(rowsCSV);
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${filenameBase}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     }
   }
 
-  // Zbierz dane wg kolejności DnD; bez meta wierszy + dodaj nagłówki z ustawień
-  const collectOrderedRows = useCallback((includeHeaders) => {
-    const rows = [];
+  // ====== TRANSACTION PARSER (heurystyka) ======
+  const MONTHS_EN = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+    jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+  };
 
-    // 1) Nagłówki z panelu eksportu
-    if (includeHeaders) {
-      const header = TRANSACTION_COLUMNS.filter(c => selectedCols.has(c));
-      if (header.length) rows.push(header);
+  function parseDateHeuristic(s) {
+    const str = s.trim();
+
+    // 1) Feb 17, 2025 / Feb 17 2025
+    const m1 = str.match(/\b([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})\b/);
+    if (m1) {
+      const mon = MONTHS_EN[m1[1].slice(0,3).toLowerCase()];
+      if (mon) return `${m1[3]}-${String(mon).padStart(2,'0')}-${String(m1[2]).padStart(2,'0')}`;
     }
 
-    // 2) Tabele z wyników
+    // 2) 17/02/2025 or 17-02-2025 or 17.02.2025
+    const m2 = str.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/);
+    if (m2) {
+      const dd = +m2[1], mm = +m2[2], yyyy = m2[3].length === 2 ? +(`20${m2[3]}`) : +m2[3];
+      if (mm<=12 && dd<=31) return `${yyyy}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
+    }
+
+    // 3) 2025-02-17
+    const m3 = str.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
+    if (m3) {
+      return `${m3[1]}-${String(m3[2]).padStart(2,'0')}-${String(m3[3]).padStart(2,'0')}`;
+    }
+
+    return null;
+  }
+
+  function normalizeNumberToken(tok) {
+    let t = tok.replace(/\s+/g, '').replace(/[$€£zł]|PLN|USD|EUR/gi, '');
+    let neg = false;
+    if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1,-1); }
+    if (t.includes(',') && t.includes('.')) {
+      const lastComma = t.lastIndexOf(',');
+      const lastDot = t.lastIndexOf('.');
+      if (lastComma > lastDot) {
+        t = t.replace(/\./g, '').replace(',', '.');
+      } else {
+        t = t.replace(/,/g, '');
+      }
+    } else if (t.includes(',')) {
+      const parts = t.split(',');
+      if (parts[parts.length - 1].length === 2) {
+        t = t.replace(/\./g, '').replace(/\s/g,'').replace(',', '.');
+      } else {
+        t = t.replace(/,/g, '');
+      }
+    } else {
+      t = t.replace(/,/g, '');
+    }
+    const val = parseFloat(t);
+    if (isNaN(val)) return null;
+    return neg ? -val : val;
+  }
+
+  function detectCurrency(s) {
+    const m = s.match(/\b(PLN|USD|EUR)\b|[€$]|zł/gi);
+    if (!m) return null;
+    const hit = m[0].toUpperCase();
+    if (hit.includes('PLN') || hit.includes('ZŁ')) return 'PLN';
+    if (hit.includes('EUR') || hit.includes('€')) return 'EUR';
+    if (hit.includes('USD') || hit.includes('$')) return 'USD';
+    return null;
+  }
+
+  function parseTransactionLine(line) {
+    const src = (line || '').replace(/\s{2,}/g, ' ').trim();
+    if (!src) return {};
+
+    const dt = parseDateHeuristic(src);
+
+    const numTokens = [];
+    const tokenRegex = /-?\(?\d[\d\s.,]*\)?/g;
+    let m;
+    while ((m = tokenRegex.exec(src)) !== null) {
+      const n = normalizeNumberToken(m[0]);
+      if (n !== null) numTokens.push({ raw: m[0], val: n, start: m.index, end: m.index + m[0].length });
+    }
+
+    let balance = null, amount = null;
+    if (numTokens.length >= 1) {
+      balance = numTokens[numTokens.length - 1].val;
+    }
+    if (numTokens.length >= 2) {
+      amount = numTokens[numTokens.length - 2].val;
+    }
+
+    const currency = detectCurrency(src);
+
+    let credit = null, debit = null;
+    if (amount !== null) {
+      if (amount < 0) debit = Math.abs(amount);
+      else credit = amount;
+    }
+
+    let desc = src;
+    if (dt) {
+      const dMonth = Object.keys(MONTHS_EN).find(k => new RegExp(`\\b${k}`, 'i').test(src));
+      if (dMonth) {
+        desc = desc.replace(/\b([A-Za-z]{3,})\s+\d{1,2},?\s+20\d{2}\b/, '').trim();
+      } else {
+        desc = desc.replace(/\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b/, '').trim();
+        desc = desc.replace(/\b20\d{2}-\d{1,2}-\d{1,2}\b/, '').trim();
+      }
+    }
+    if (numTokens.length) {
+      const last = numTokens[numTokens.length - 1];
+      desc = desc.slice(0, last.start).trim();
+    }
+    desc = desc.replace(/\s{2,}/g, ' ').replace(/[•·]+/g, '').trim();
+
+    const out = {};
+    if (dt) out["Date"] = dt;
+    if (desc) out["Description"] = desc;
+    if (credit !== null) out["Credit"] = credit;
+    if (debit !== null) out["Debit"] = debit;
+    if (amount !== null) out["Amount"] = amount;
+    if (balance !== null) out["Balance"] = balance;
+    if (currency) out["Currency"] = currency;
+
+    return out;
+  }
+
+  // ===== Zbierz dane wg kolejności DnD + mapowanie (opcjonalnie) =====
+  const collectOrderedRows = useCallback((includeHeaders) => {
+    const rows = [];
+    const header = TRANSACTION_COLUMNS.filter(c => selectedCols.has(c));
+    if (includeHeaders && header.length) rows.push(header);
+
     const pages = Object.keys(pageData).map((n) => +n)
       .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
       .sort((a, b) => a - b);
@@ -739,25 +829,45 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     for (const p of pages) {
       const d = pageData[p];
       const orders = tableOrders[p] || {};
+
       d.tables.forEach((T, ti) => {
         const ord = orders[ti] || {};
         const orderedRows = (ord.row?.length === T.cells.length) ? ord.row : Array.from({ length: T.cells.length }, (_, i) => i);
         const orderedCols = (T.cells[0] && ord.col?.length === T.cells[0].length) ? ord.col : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
-        orderedRows.forEach((ri) => rows.push(orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "")));
+
+        orderedRows.forEach((ri) => {
+          const rawCells = orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "");
+          if (mapDetectedRows && header.length) {
+            const joined = rawCells.join(" ").replace(/\s{2,}/g, " ").trim();
+            const parsed = parseTransactionLine(joined);
+            const outRow = header.map((h) => parsed[h] ?? "");
+            rows.push(outRow);
+          } else {
+            rows.push(rawCells);
+          }
+        });
       });
-      // Loose jako osobne wiersze (1 kolumna)
-      if (d.loose?.length) d.loose.forEach((frag) => rows.push([frag.text || ""]));
+
+      (d.loose || []).forEach((frag) => {
+        const text = (frag.text || "").trim();
+        if (mapDetectedRows && header.length) {
+          const parsed = parseTransactionLine(text);
+          const outRow = header.map((h) => parsed[h] ?? "");
+          rows.push(outRow);
+        } else {
+          rows.push([text]);
+        }
+      });
     }
 
-    if (rows.length === 0) rows.push([]);
+    if (rows.length === 0) rows.push(header.length ? header.slice(0) : []);
     return rows;
-  }, [pageData, tableOrders, selectedCols]);
+  }, [pageData, tableOrders, selectedCols, mapDetectedRows]);
 
-  // Export handlers (z panelu)
+  // Export handlers
   const doExport = async () => {
     const base = String(docName || "file").replace(/\.[^.]+$/, "");
-    const rows = collectOrderedRows(true); // Z NAGŁÓWKAMI z checkboxów
-
+    const rows = collectOrderedRows(true);
     if (exportType === "csv") {
       const csv = buildCSV(rows);
       const blob = new Blob([csv], { type: "text/csv" });
@@ -1024,7 +1134,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             );
           })}
 
-          {/* LOose list */}
+          {/* Loose list */}
           {currentPageData.loose.length > 0 && (
             <>
               <div className="text-sm font-medium mt-4 mb-1">Loose selections (drag to table)</div>
@@ -1090,6 +1200,19 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                       {label}
                     </label>
                   ))}
+                </div>
+                <div className="mt-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={mapDetectedRows}
+                      onChange={(e)=>setMapDetectedRows(e.target.checked)}
+                    />
+                    Try to map detected rows to selected columns
+                  </label>
+                  <p className="text-xs text-gray-500">
+                    Heurystyka: data, kwoty (Amount/Credit/Debit), saldo (Balance), waluta, opis (Description).
+                  </p>
                 </div>
               </div>
             </div>
