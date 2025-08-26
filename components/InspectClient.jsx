@@ -17,6 +17,8 @@ const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h:
 
 // ciaśniejsza tolerancja
 const EPS = 0.25;
+// minimalny wymagany procent pokrycia ROW/COLUMN w TABLE, aby zaliczyć (0..1)
+const OVERLAP_T = 0.35;
 
 function pointInRect(px, py, r) {
   return px >= r.x - EPS && px <= r.x + r.w + EPS && py >= r.y - EPS && py <= r.y + r.h + EPS;
@@ -36,6 +38,14 @@ function rectIntersection(a, b) {
   const y2 = Math.min(a.y + a.h, b.y + b.h);
   if (x2 <= x1 || y2 <= y1) return null;
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+function rectArea(r) { return Math.max(0, r.w) * Math.max(0, r.h); }
+function overlapRatio(container, candidate) {
+  const inter = rectIntersection(container, candidate);
+  if (!inter) return 0;
+  const a = rectArea(candidate);
+  if (a === 0) return 0;
+  return rectArea(inter) / a;
 }
 
 // uchwyty
@@ -440,12 +450,21 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         const tRect = t.rectPx;
 
         const inRows = rows
-          .filter((r) => pointInRect(r.rectPx.x + r.rectPx.w / 2, r.rectPx.y + r.rectPx.h / 2, tRect))
+          .filter((r) => {
+            const cx = r.rectPx.x + r.rectPx.w / 2;
+            const cy = r.rectPx.y + r.rectPx.h / 2;
+            // kryterium: środek w TABLE LUB wystarczające pokrycie powierzchni
+            return pointInRect(cx, cy, tRect) || overlapRatio(tRect, r.rectPx) >= OVERLAP_T;
+          })
           .sort((a, b) => a.rectPx.y - b.rectPx.y)
           .map((r) => r.rectPx);
 
         const inCols = cols
-          .filter((c) => pointInRect(c.rectPx.x + c.rectPx.w / 2, c.rectPx.y + c.rectPx.h / 2, tRect))
+          .filter((c) => {
+            const cx = c.rectPx.x + c.rectPx.w / 2;
+            const cy = c.rectPx.y + c.rectPx.h / 2;
+            return pointInRect(cx, cy, tRect) || overlapRatio(tRect, c.rectPx) >= OVERLAP_T;
+          })
           .sort((a, b) => a.rectPx.x - b.rectPx.x)
           .map((c) => c.rectPx);
 
@@ -456,7 +475,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       for (const s of [...rows, ...cols]) {
         const centerX = s.rectPx.x + s.rectPx.w / 2;
         const centerY = s.rectPx.y + s.rectPx.h / 2;
-        const inAnyTable = tables.some((t) => pointInRect(centerX, centerY, t.rectPx));
+        const inAnyTable = tables.some(
+          (t) => pointInRect(centerX, centerY, t.rectPx) || overlapRatio(t.rectPx, s.rectPx) >= OVERLAP_T
+        );
         if (!inAnyTable) loose.push({ type: s.type, rect: s.rectPx });
       }
 
@@ -516,18 +537,27 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
     // proste testy w przeglądarce, tylko w DEV
-    (function runCsvTests() {
+    (function runSelfTests() {
       try {
+        // CSV
         const rows1 = [["a", "b"], ["c", "d"]];
         const out1 = buildCSV(rows1);
         console.assert(out1 === '"a","b"\n"c","d"', "CSV: podstawowy join z LF");
-
         const rows2 = [["a,b", "c"], ['He said "Hi"']];
         const out2 = buildCSV(rows2);
-        console.assert(out2.includes('"a,b"'), "CSV: przecinek powinien być w cudzysłowie");
-        console.assert(out2.includes('"He said ""Hi"""'), "CSV: cudzysłowy powinny być zdublowane");
+        console.assert(out2.includes('"a,b"'), "CSV: przecinek w polu -> cudzysłów");
+        console.assert(out2.includes('"He said ""Hi"""'), "CSV: cudzysłowy podwajane");
+
+        // Geometria overlap
+        const A = { x: 0, y: 0, w: 100, h: 100 };
+        const B = { x: 25, y: 25, w: 10, h: 10 };
+        const C = { x: 80, y: 0, w: 40, h: 40 }; // 1/4 poza
+        const rAB = overlapRatio(A, B);
+        const rAC = overlapRatio(A, C);
+        console.assert(Math.abs(rAB - 1) < 1e-9, "overlapRatio: środek w 100% wewnątrz -> 1");
+        console.assert(rAC > 0 && rAC < 1, "overlapRatio: częściowe pokrycie w (0,1)");
       } catch (e) {
-        console.warn("CSV self-tests failed:", e);
+        console.warn("Self-tests failed:", e);
       }
     })();
   }
@@ -543,7 +573,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     const rows = [];
     for (const p of pages) {
       const d = pageData[p];
-      d.tables.forEach((T, ti) => {
+      d.tables.forEach((T) => {
         // Każdy wiersz tabeli to wiersz CSV
         T.cells.forEach((row) => rows.push([...row]));
         // Przerwa między tabelami
