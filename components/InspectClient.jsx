@@ -15,9 +15,12 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// mniejsza tolerancja
-const EPS = 0.5;
+// ciaśniejsza tolerancja
+const EPS = 0.25;
 
+function pointInRect(px, py, r) {
+  return px >= r.x - EPS && px <= r.x + r.w + EPS && py >= r.y - EPS && py <= r.y + r.h + EPS;
+}
 function rectsIntersect(r1, r2) {
   return !(
     r2.x > r1.x + r1.w + EPS ||
@@ -33,9 +36,6 @@ function rectIntersection(a, b) {
   const y2 = Math.min(a.y + a.h, b.y + b.h);
   if (x2 <= x1 || y2 <= y1) return null;
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
-}
-function pointInRect(px, py, r) {
-  return px >= r.x - EPS && px <= r.x + r.w + EPS && py >= r.y - EPS && py <= r.y + r.h + EPS;
 }
 
 // uchwyty
@@ -67,12 +67,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
-  const [pdfjs, setPdfjs] = useState(null);          // cały moduł pdfjs-dist
+  const [pdfjs, setPdfjs] = useState(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [pageNum, setPageNum] = useState(1);
   const [pageCount, setPageCount] = useState(1);
   const [scale, setScale] = useState(1.25);
-  const [viewport, setViewport] = useState({ width: 0, height: 0, transform: [1,0,0,1,0,0] });
+  const [viewport, setViewport] = useState({ width: 0, height: 0, transform: [1, 0, 0, 1, 0, 0] });
   const [error, setError] = useState(null);
 
   // cache: { [page]: { items, viewportTransform } }
@@ -119,7 +119,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         if (mounted) setError("PDF.js init failed");
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   // load doc
@@ -130,12 +132,16 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       if (!pdfUrl && !pdfData) return;
 
       setError(null);
+      if (pdfDoc) {
+        try { await pdfDoc.destroy(); } catch {}
+      }
       setPdfDoc(null);
       setTextCache({});
       setPageData({});
 
       try {
-        const params = pdfData ? { data: pdfData } : { url: pdfUrl };
+        const bustUrl = (u) => (typeof u === "string" ? `${u}${u.includes("?") ? "&" : "?"}ts=${Date.now()}` : u);
+        const params = pdfData ? { data: pdfData } : { url: bustUrl(pdfUrl), httpHeaders: { "Cache-Control": "no-cache" } };
         const doc = await pdfjs.getDocument(params).promise;
         if (!mounted) return;
         setPdfDoc(doc);
@@ -150,7 +156,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         setPageNum(1);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [pdfUrl, pdfData, pdfjs]);
 
   // render + cache text with viewport transform
@@ -168,14 +176,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
-    if (!textCache[pageNum]) {
-      const txt = await page.getTextContent({ includeMarkedContent: true, disableCombineTextItems: false });
-      setTextCache((prev) => ({
-        ...prev,
-        [pageNum]: { items: txt.items, vpTransform: vp.transform }
-      }));
-    }
-  }, [pdfDoc, pageNum, scale, textCache]);
+    const txt = await page.getTextContent({ includeMarkedContent: true, disableCombineTextItems: false });
+    setTextCache((prev) => ({
+      ...prev,
+      [pageNum]: { items: txt.items, vpTransform: vp.transform },
+    }));
+  }, [pdfDoc, pageNum, scale]);
 
   useEffect(() => {
     renderPage().catch((e) => console.error("Render error:", e));
@@ -193,8 +199,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   // toolbar
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
-  const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
-  const nextPage = () => { setActiveIndex(-1); setPageNum((n) => Math.min(pageCount, n + 1)); };
+  const prevPage = () => {
+    setActiveIndex(-1);
+    setPageNum((n) => Math.max(1, n - 1));
+  };
+  const nextPage = () => {
+    setActiveIndex(-1);
+    setPageNum((n) => Math.min(pageCount, n + 1));
+  };
 
   const nextColorFor = (t) => {
     const list = COLORS[t];
@@ -274,7 +286,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         const minSize = 8;
         if (["tl", "l", "bl"].includes(handle)) {
           const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width);
-          r.w = r.x + r.w - nx; r.x = nx;
+          r.w = r.x + r.w - nx;
+          r.x = nx;
         }
         if (["tr", "r", "br"].includes(handle)) {
           const nx2 = clamp(Math.max(x, r.x + minSize), 0, viewport.width);
@@ -282,7 +295,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         }
         if (["tl", "t", "tr"].includes(handle)) {
           const ny = clamp(Math.min(y, r.y + r.h - minSize), 0, viewport.height);
-          r.h = r.y + r.h - ny; r.y = ny;
+          r.h = r.y + r.h - ny;
+          r.y = ny;
         }
         if (["bl", "b", "br"].includes(handle)) {
           const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height);
@@ -309,7 +323,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   const onMouseUp = () => {
-    if (dragging) { setDragging(null); return; }
+    if (dragging) {
+      setDragging(null);
+      return;
+    }
     if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
@@ -340,29 +357,34 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   }, [activeIndex, pageNum, pageCount]);
 
   // ----- PRECYZYJNE BBOXY TEKSTU W KOORDYNATACH VIEWPORTU -----
-  const getTextBoxesForPage = useCallback((pageNumber) => {
-    const entry = textCache[pageNumber];
-    if (!entry || !pdfjs) return [];
-    const { items, vpTransform } = entry;
-    const Util = pdfjs.Util;
+  const getTextBoxesForPage = useCallback(
+    (pageNumber) => {
+      const entry = textCache[pageNumber];
+      if (!entry || !pdfjs) return [];
+      const { items, vpTransform } = entry;
+      const Util = pdfjs.Util;
 
-    return items.map((it) => {
-      // przetransformuj macierz glifu do viewportu
-      const T = Util.transform(vpTransform, it.transform || [1,0,0,1,0,0]);
-      // szerokosc z item.width * skala X (wyciagamy z macierzy viewportu)
-      // ale prościej: width w pdf.js jest w jednostkach viewportu, więc mnożenie niepotrzebne,
-      // ważna jest wysokość wynikająca z transformacji (skalowanie Y)
-      const x = T[4];
-      const yTop = T[5] - Math.abs(T[3]);   // top-left (baseline minus wysokosc)
-      const w = it.width || Math.abs(T[0]); // fallback
-      const h = Math.abs(T[3]) || (it.height ?? 0);
-      return { it, x, y: yTop, w, h };
-    });
-  }, [textCache, pdfjs]);
+      return items.map((it) => {
+        const T = Util.transform(vpTransform, it.transform || [1, 0, 0, 1, 0, 0]);
+        const x = T[4];
+        const w = (it.width ?? 0) || Math.hypot(T[0], T[2]);
+        const h = Math.hypot(T[1], T[3]);
+        const yTop = T[5] - h; // top-left
+        return { it, x, y: yTop, w, h };
+      });
+    },
+    [textCache, pdfjs]
+  );
 
   const collectTextInRect = useCallback((rect, boxes) => {
+    // bierzemy glify, których środek leży w prostokącie komórki
+    const inside = (bx) => {
+      const cx = bx.x + bx.w / 2;
+      const cy = bx.y + bx.h / 2;
+      return pointInRect(cx, cy, rect);
+    };
     const picked = [];
-    for (const bx of boxes) if (rectsIntersect(rect, bx)) picked.push(bx);
+    for (const bx of boxes) if (inside(bx)) picked.push(bx);
     picked.sort((a, b) => {
       const dy = a.y - b.y;
       if (Math.abs(dy) > 0.75) return dy;
@@ -372,48 +394,49 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   }, []);
 
   // ----- BUDOWA TABEL (TABLE + ROW + COLUMN) -----
-  const buildTablesForPage = useCallback((page) => {
-    const sels = selections[page] || [];
-    if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
+  const buildTablesForPage = useCallback(
+    (page) => {
+      const sels = selections[page] || [];
+      if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
 
-    const tables = [];
-    const rows = [];
-    const cols = [];
-    for (const s of sels) {
-      const r = fromNorm(s.rect, viewport.width, viewport.height);
-      if (s.type === Tool.TABLE) tables.push({ ...s, rectPx: r });
-      else if (s.type === Tool.ROW) rows.push({ ...s, rectPx: r });
-      else if (s.type === Tool.COLUMN) cols.push({ ...s, rectPx: r });
-    }
+      const tables = [];
+      const rows = [];
+      const cols = [];
+      for (const s of sels) {
+        const r = fromNorm(s.rect, viewport.width, viewport.height);
+        if (s.type === Tool.TABLE) tables.push({ ...s, rectPx: r });
+        else if (s.type === Tool.ROW) rows.push({ ...s, rectPx: r });
+        else if (s.type === Tool.COLUMN) cols.push({ ...s, rectPx: r });
+      }
 
-    const resultTables = tables.map((t) => {
-      const tRect = t.rectPx;
+      const resultTables = tables.map((t) => {
+        const tRect = t.rectPx;
 
-      // wliczamy tylko takie wiersze/kolumny, ktorych ŚRODEK leży w TABLE
-      const inRows = rows
-        .filter((r) => pointInRect(r.rectPx.x + r.rectPx.w / 2, r.rectPx.y + r.rectPx.h / 2, tRect))
-        .sort((a, b) => a.rectPx.y - b.rectPx.y)
-        .map((r) => r.rectPx);
+        const inRows = rows
+          .filter((r) => pointInRect(r.rectPx.x + r.rectPx.w / 2, r.rectPx.y + r.rectPx.h / 2, tRect))
+          .sort((a, b) => a.rectPx.y - b.rectPx.y)
+          .map((r) => r.rectPx);
 
-      const inCols = cols
-        .filter((c) => pointInRect(c.rectPx.x + c.rectPx.w / 2, c.rectPx.y + c.rectPx.h / 2, tRect))
-        .sort((a, b) => a.rectPx.x - b.rectPx.x)
-        .map((c) => c.rectPx);
+        const inCols = cols
+          .filter((c) => pointInRect(c.rectPx.x + c.rectPx.w / 2, c.rectPx.y + c.rectPx.h / 2, tRect))
+          .sort((a, b) => a.rectPx.x - b.rectPx.x)
+          .map((c) => c.rectPx);
 
-      return { rect: tRect, rows: inRows.length ? inRows : [tRect], cols: inCols.length ? inCols : [tRect] };
-    });
+        return { rect: tRect, rows: inRows.length ? inRows : [tRect], cols: inCols.length ? inCols : [tRect] };
+      });
 
-    // loose = zaznaczenia poza TABLE (jako pojedyncze fragmenty)
-    const loose = [];
-    for (const s of [...rows, ...cols]) {
-      const centerX = s.rectPx.x + s.rectPx.w / 2;
-      const centerY = s.rectPx.y + s.rectPx.h / 2;
-      const inAnyTable = tables.some((t) => pointInRect(centerX, centerY, t.rectPx));
-      if (!inAnyTable) loose.push({ type: s.type, rect: s.rectPx });
-    }
+      const loose = [];
+      for (const s of [...rows, ...cols]) {
+        const centerX = s.rectPx.x + s.rectPx.w / 2;
+        const centerY = s.rectPx.y + s.rectPx.h / 2;
+        const inAnyTable = tables.some((t) => pointInRect(centerX, centerY, t.rectPx));
+        if (!inAnyTable) loose.push({ type: s.type, rect: s.rectPx });
+      }
 
-    return { tables: resultTables, loose };
-  }, [selections, viewport.width, viewport.height]);
+      return { tables: resultTables, loose };
+    },
+    [selections, viewport.width, viewport.height]
+  );
 
   // recompute pageData
   useEffect(() => {
@@ -433,7 +456,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
           const cells = rowsRects.map((rr) =>
             colsRects.map((cc) => {
-              // komorka to dokladne przeciecie TABLE ∩ ROW ∩ COLUMN
               const rc = rectIntersection(T.rect, rr);
               const cellRect = rc ? rectIntersection(rc, cc) : null;
               if (!cellRect) return "";
@@ -484,7 +506,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     }
     if (rows.length === 0) rows.push(["page", "table/loose", "row", "value..."]);
 
-    const csv = rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const csv = rows
+      .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
+      .join("
+");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -496,16 +521,33 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     URL.revokeObjectURL(url);
   };
 
-  // UI
   return (
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
 
         <div className="flex items-center gap-1">
-          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.TABLE ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.TABLE)}>[1] Create Table</button>
-          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.COLUMN ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.COLUMN)}>[2] Add Column</button>
-          <button className={`px-3 py-1 border rounded hover:bg-gray-100 ${tool === Tool.ROW ? "bg-gray-100" : ""}`} onClick={() => setTool(Tool.ROW)}>[3] Add Row</button>
+          <button
+            className={`px-3 py-1 border rounded text-white ${tool === Tool.TABLE ? "ring-2 ring-offset-1" : ""}`}
+            style={{ background: COLORS.table[0], borderColor: COLORS.table[0], opacity: tool === Tool.TABLE ? 1 : 0.85 }}
+            onClick={() => setTool(Tool.TABLE)}
+          >
+            [1] Create Table
+          </button>
+          <button
+            className={`px-3 py-1 border rounded text-white ${tool === Tool.COLUMN ? "ring-2 ring-offset-1" : ""}`}
+            style={{ background: COLORS.column[0], borderColor: COLORS.column[0], opacity: tool === Tool.COLUMN ? 1 : 0.85 }}
+            onClick={() => setTool(Tool.COLUMN)}
+          >
+            [2] Add Column
+          </button>
+          <button
+            className={`px-3 py-1 border rounded text-white ${tool === Tool.ROW ? "ring-2 ring-offset-1" : ""}`}
+            style={{ background: COLORS.row[0], borderColor: COLORS.row[0], opacity: tool === Tool.ROW ? 1 : 0.85 }}
+            onClick={() => setTool(Tool.ROW)}
+          >
+            [3] Add Row
+          </button>
         </div>
 
         <span className="mx-1" />
@@ -547,7 +589,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
                 key={i}
                 className="absolute"
                 style={{
-                  left: r.x, top: r.y, width: r.w, height: r.h,
+                  left: r.x,
+                  top: r.y,
+                  width: r.w,
+                  height: r.h,
                   border: `2px solid ${s.color}`,
                   boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
                   background: `${s.color}1a`,
@@ -574,7 +619,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
                     setDragging({ mode: "resize", handle, startMouse: { x, y }, startRect: { ...r } });
                   }}
                 />
-                <div className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br" style={{ left: 0, top: 0, color: "#fff", background: s.color }}>
+                <div
+                  className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br"
+                  style={{ left: 0, top: 0, color: "#fff", background: s.color }}
+                >
                   {s.type.toUpperCase()}
                 </div>
               </div>
@@ -622,7 +670,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
               <ul className="space-y-1 text-sm">
                 {currentPageData.loose.map((L, i) => (
                   <li key={i}>
-                    <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white" style={{ background: L.type === Tool.COLUMN ? COLORS.column[1] : COLORS.row[1] }}>
+                    <span
+                      className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
+                      style={{ background: L.type === Tool.COLUMN ? COLORS.column[1] : COLORS.row[1] }}
+                    >
                       {L.type}
                     </span>
                     {L.text || <span className="text-gray-400">—</span>}
