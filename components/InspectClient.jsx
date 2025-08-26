@@ -522,6 +522,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   return (
+
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
