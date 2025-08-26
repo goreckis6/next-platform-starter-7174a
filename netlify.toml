@@ -20,3 +20,8 @@
   from = "/api/ai-parse"
   to = "/.netlify/functions/ai-parse"
   status = 200
+
+[functions."ai-parse"]
+  # Maks. co plan pozwala (Starter zwykle ~10s, wyższe plany do 26s)
+  timeout = 26
+  memory = 512

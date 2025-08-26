@@ -3,7 +3,9 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-// Minimal UI + AI-only pipeline: PDF -> text -> /.netlify/functions/ai-parse -> CSV/XLSX
+// AI-only pipeline z chunkowaniem: PDF -> tekst per strona -> porcje (5 stron) ->
+// /.netlify/functions/ai-parse (kilka wywołań) -> merge + dedupe -> CSV/XLSX
+
 export default function InspectClient({
   pdfUrl,
   pdfData,
@@ -30,6 +32,7 @@ export default function InspectClient({
 
   const [textCache, setTextCache] = useState({});
   const [isParsing, setIsParsing] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [transactions, setTransactions] = useState([]); // wynik AI
 
   // Konfig eksportu
@@ -200,12 +203,10 @@ export default function InspectClient({
   const prevPage = () => setPageNum((n) => Math.max(1, n - 1));
   const nextPage = () => setPageNum((n) => Math.min(pageCount, n + 1));
 
-  // ===== AI: zbierz tekst z całego PDF i wyślij do Netlify Function =====
-  const collectAllText = useCallback(async () => {
-    if (!pdfDoc) return "";
-    const pages = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
-    const out = [];
-    for (const p of pages) {
+  // ===== Helpers: tekst per strona i chunkowanie =====
+  const getPageText = useCallback(
+    async (p) => {
+      if (!pdfDoc) return "";
       if (!textCache[p]) {
         const page = await pdfDoc.getPage(p);
         const vp = page.getViewport({ scale: 1 });
@@ -217,45 +218,99 @@ export default function InspectClient({
           ...prev,
           [p]: { items: txt.items, vpTransform: vp.transform },
         }));
-        out.push(txt.items.map((it) => it.str).join(" ").trim());
-      } else {
-        out.push(textCache[p].items.map((it) => it.str).join(" ").trim());
+        return txt.items.map((it) => it.str).join(" ").trim();
       }
-    }
-    return out.filter(Boolean).join("\n");
-  }, [pdfDoc, textCache]);
+      return textCache[p].items.map((it) => it.str).join(" ").trim();
+    },
+    [pdfDoc, textCache]
+  );
 
+  function chunkArray(arr, size) {
+    const out = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  }
+
+  function makeTxKey(t) {
+    const date = String(t?.Date ?? "").trim();
+    const amt = String(t?.Amount ?? t?.Debit ?? t?.Credit ?? "").trim();
+    const desc = String(t?.Description ?? "").trim().replace(/\s+/g, " ");
+    return `${date}||${amt}||${desc}`.toLowerCase();
+  }
+
+  // ===== Główna procedura: parsowanie w porcjach =====
   const parseWithAI = useCallback(async () => {
+    if (!pdfDoc) return;
     try {
       setIsParsing(true);
-      const allText = await collectAllText();
-      if (!allText.trim()) {
-        alert("Brak tekstu do przetworzenia.");
-        return;
+      setProgress({ done: 0, total: 0 });
+
+      const pages = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
+      const CHUNK_PAGES = 5; // <= zmień, jeśli trzeba krócej/szybciej
+      const chunks = chunkArray(pages, CHUNK_PAGES);
+      setProgress({ done: 0, total: chunks.length });
+
+      const all = new Map();
+      const failed = [];
+
+      for (let i = 0; i < chunks.length; i++) {
+        const group = chunks[i];
+        // Zbierz tekst tej porcji
+        const texts = [];
+        for (const p of group) {
+          const t = await getPageText(p);
+          if (t) texts.push(`(Page ${p})\n${t}`);
+        }
+        const payload = texts.join("\n\n");
+
+        // wołaj funkcję Netlify
+        const res = await fetch("/.netlify/functions/ai-parse", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: payload }),
+        });
+
+        if (!res.ok) {
+          const body = await res.text().catch(() => "(no body)");
+          console.error("Chunk failed:", group, res.status, body);
+          failed.push({ group, status: res.status, body });
+        } else {
+          const data = await res.json().catch(() => ({}));
+          const list = Array.isArray(data.transactions)
+            ? data.transactions
+            : [];
+          for (const t of list) {
+            const k = makeTxKey(t);
+            if (!all.has(k)) all.set(k, t);
+          }
+        }
+
+        setProgress({ done: i + 1, total: chunks.length });
       }
 
-      const res = await fetch("/.netlify/functions/ai-parse", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: allText }),
-      });
+      setTransactions(Array.from(all.values()));
 
-      if (!res.ok) {
-        const body = await res.text().catch(() => "(no body)");
-        console.error("AI parse failed:", res.status, body);
-        alert(`AI parsing failed: ${res.status}\n${body}`);
-        return;
+      if (failed.length) {
+        const msg = failed
+          .map(
+            (f) =>
+              `pages: ${f.group.join(", ")} | status: ${f.status} | body: ${f.body.slice(
+                0,
+                200
+              )}`
+          )
+          .join("\n");
+        alert(
+          `Część porcji nie przeszła (niektóre 504). Wyniki częściowe zebrane.\n\nSzczegóły:\n${msg}`
+        );
       }
-
-      const data = await res.json();
-      setTransactions(Array.isArray(data.transactions) ? data.transactions : []);
     } catch (e) {
       console.error(e);
       alert("AI parsing failed (client). Szczegóły w konsoli.");
     } finally {
       setIsParsing(false);
     }
-  }, [collectAllText]);
+  }, [pdfDoc, getPageText]);
 
   // ===== Export =====
   function buildCSV(rows) {
@@ -362,6 +417,13 @@ export default function InspectClient({
     );
   }
 
+  const progressLabel =
+    isParsing && progress.total
+      ? `Parsing… ${progress.done}/${progress.total}`
+      : isParsing
+      ? "Parsing…"
+      : "Parse with AI";
+
   return (
     <div className="w-full">
       {/* Toolbar */}
@@ -396,7 +458,7 @@ export default function InspectClient({
           className="px-4 py-2 rounded-md text-white font-semibold disabled:opacity-60 bg-indigo-600 hover:bg-indigo-700"
           title="Parse entire PDF with AI"
         >
-          {isParsing ? "Parsing…" : "Parse with AI"}
+          {progressLabel}
         </button>
 
         <div className="ml-auto flex items-center gap-3">
@@ -445,7 +507,7 @@ export default function InspectClient({
 
           {!transactions.length ? (
             <div className="text-sm text-gray-500">
-              Kliknij <b>Parse with AI</b>, aby przetworzyć cały PDF.
+              Kliknij <b>Parse with AI</b>, aby przetworzyć PDF. Duże pliki są dzielone na porcje, by uniknąć timeoutów (504).
             </div>
           ) : (
             <>
