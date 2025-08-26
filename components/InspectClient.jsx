@@ -3,8 +3,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-// Minimal UI + AI-only pipeline: PDF -> text -> /api/ai-parse -> CSV/XLSX
-
+// Minimal UI + AI-only pipeline: PDF -> text -> /.netlify/functions/ai-parse -> CSV/XLSX
 export default function InspectClient({
   pdfUrl,
   pdfData,
@@ -62,9 +61,6 @@ export default function InspectClient({
       n.has(label) ? n.delete(label) : n.add(label);
       return n;
     });
-
-  // ---- helpers
-  const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 
   const deriveDocName = useCallback(() => {
     if (typeof pdfNameProp === "string" && pdfNameProp.trim())
@@ -204,14 +200,12 @@ export default function InspectClient({
   const prevPage = () => setPageNum((n) => Math.max(1, n - 1));
   const nextPage = () => setPageNum((n) => Math.min(pageCount, n + 1));
 
-  // ===== AI: zbierz tekst z całego PDF i wyślij do /api/ai-parse =====
+  // ===== AI: zbierz tekst z całego PDF i wyślij do Netlify Function =====
   const collectAllText = useCallback(async () => {
     if (!pdfDoc) return "";
-    // Wymuś tekst dla wszystkich stron (jeśli nie był renderowany)
     const pages = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
     const out = [];
     for (const p of pages) {
-      // Jeśli brakuje w cache, dociągnij lekko (bez renderu canvas)
       if (!textCache[p]) {
         const page = await pdfDoc.getPage(p);
         const vp = page.getViewport({ scale: 1 });
@@ -219,7 +213,6 @@ export default function InspectClient({
           includeMarkedContent: true,
           disableCombineTextItems: false,
         });
-        // nie nadpisujemy aktualnego pageNum renderu
         setTextCache((prev) => ({
           ...prev,
           [p]: { items: txt.items, vpTransform: vp.transform },
@@ -240,17 +233,25 @@ export default function InspectClient({
         alert("Brak tekstu do przetworzenia.");
         return;
       }
-      const res = await fetch("/api/ai-parse", {
+
+      const res = await fetch("/.netlify/functions/ai-parse", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: allText }),
       });
-      if (!res.ok) throw new Error(`AI parsing failed: ${res.status}`);
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "(no body)");
+        console.error("AI parse failed:", res.status, body);
+        alert(`AI parsing failed: ${res.status}\n${body}`);
+        return;
+      }
+
       const data = await res.json();
       setTransactions(Array.isArray(data.transactions) ? data.transactions : []);
     } catch (e) {
       console.error(e);
-      alert("AI parsing failed. Sprawdź logi i klucz OPENAI_API_KEY.");
+      alert("AI parsing failed (client). Szczegóły w konsoli.");
     } finally {
       setIsParsing(false);
     }
@@ -354,10 +355,7 @@ export default function InspectClient({
   if (fullWindow) {
     return (
       <div className="w-full h-screen overflow-hidden">
-        <div
-          className="w-full h-full relative"
-          style={{ lineHeight: 0 }}
-        >
+        <div className="w-full h-full relative" style={{ lineHeight: 0 }}>
           {CanvasShell}
         </div>
       </div>
@@ -371,28 +369,16 @@ export default function InspectClient({
         <div className="text-sm px-2 py-1 border rounded">
           Page {pageNum}/{pageCount}
         </div>
-        <button
-          className="px-3 py-1 border rounded hover:bg-gray-100"
-          onClick={zoomIn}
-        >
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>
           [+] Zoom
         </button>
-        <button
-          className="px-3 py-1 border rounded hover:bg-gray-100"
-          onClick={zoomOut}
-        >
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>
           [-] Zoom
         </button>
-        <button
-          className="px-3 py-1 border rounded hover:bg-gray-100"
-          onClick={prevPage}
-        >
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>
           &lt; Prev
         </button>
-        <button
-          className="px-3 py-1 border rounded hover:bg-gray-100"
-          onClick={nextPage}
-        >
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>
           Next &gt;
         </button>
         <button
