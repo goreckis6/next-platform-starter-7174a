@@ -50,7 +50,7 @@ function arrayMove(arr, from, to) {
   return a;
 }
 
-// uchwyty rozmiaru – WYŁĄCZONE, zostawiam komponent (może się przydać)
+// uchwyty rozmiaru – WYŁĄCZONE, ale komponent zostawiony na przyszłość
 const HandleDots = ({ r, active, onMouseDown }) =>
   active && SHOW_HANDLES ? (
     <>
@@ -101,11 +101,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // wyniki + sortowanie + autoBuild + ręczne przypięcia z „Loose”
+  // wyniki + sortowanie + autoBuild + smartDetect + ręczne przypięcia z „Loose”
   const [pageData, setPageData] = useState({});
   const [tableOrders, setTableOrders] = useState({}); // { [page]: { [ti]: {row:[...], col:[...] } } }
   const [autoBuild, setAutoBuild] = useState(true);
-  const [smartDetect, setSmartDetect] = useState(true); // NOWE: inteligentne wykrywanie wierszy/kolumn z tekstu
+  const [smartDetect, setSmartDetect] = useState(true);
   const [manualLinks, setManualLinks] = useState({}); // { [page]: { [ti]: { addRows:[rect], addCols:[rect] } } }
 
   // podglądy DnD
@@ -478,7 +478,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       };
     });
 
-    // policz Loose: tylko te, które NIE trafiły do żadnej tabeli (auto ani manualnie)
+    // policz Loose: tylko te, które NIE trafiły do żadnej tabeli
     const allAssignedRects = new Set();
     baseTables.forEach((T) => {
       T.rows.forEach((r) => allAssignedRects.add(JSON.stringify(r)));
@@ -488,7 +488,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     const loose = [];
     for (const s of [...rows, ...cols]) {
       const key = JSON.stringify(s.rectPx);
-      if (allAssignedRects.has(key)) continue; // już wykorzystane
+      if (allAssignedRects.has(key)) continue;
       const cx = s.rectPx.x + s.rectPx.w / 2, cy = s.rectPx.y + s.rectPx.h / 2;
       const inAny = baseTables.some(t => pointInRect(cx, cy, t.rect) || overlapRatio(t.rect, s.rectPx) >= OVERLAP_T);
       if (!inAny) loose.push({ type: s.type, rect: s.rectPx });
@@ -510,14 +510,16 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         const boxes = getTextBoxesForPage(p);
 
         const tablesOut = structure.tables.map((T) => {
-          const cells = (T.rows.length ? T.rows : [T.rect]).map((rr) =>
-            (T.cols.length ? T.cols : [T.rect]).map((cc) => {
+          const rowsRects = T.rows.length ? T.rows : [T.rect];
+          const colsRects = T.cols.length ? T.cols : [T.rect];
+          const cells = rowsRects.map((rr) =>
+            colsRects.map((cc) => {
               const rc = rectIntersection(T.rect, rr);
               const cellRect = rc ? rectIntersection(rc, cc) : null;
               return cellRect ? collectTextInRect(cellRect, boxes) : "";
             })
           );
-          return { rect: T.rect, rows: T.rows.length ? T.rows : [T.rect], cols: T.cols.length ? T.cols : [T.rect], cells };
+          return { rect: T.rect, rows: rowsRects, cols: colsRects, cells };
         });
 
         const looseOut = structure.loose.map((frag) => ({
@@ -553,23 +555,47 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
-  // CSV/XLSX helpers
-  function buildCSV(rows) { return rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n"); }
+  // CSV helper
+  function buildCSV(rows) {
+    return rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  }
+
+  // XLSX via CDN (bez zależności w buildzie)
+  async function ensureXLSX() {
+    if (typeof window === "undefined") throw new Error("XLSX is only available in browser.");
+    if (window.XLSX) return window.XLSX;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+      s.async = true;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("Failed to load XLSX library"));
+      document.head.appendChild(s);
+    });
+    return window.XLSX;
+  }
+
   async function buildAndDownloadXLSX(rows, filenameBase) {
-    const XLSX = await import("xlsx");
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
-    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-    const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${filenameBase}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    try {
+      const XLSX = await ensureXLSX();
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${filenameBase}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+      alert("XLSX export failed (library load). Falling back to CSV.");
+      await handleExportCSV();
+    }
   }
 
   // zebrane wiersze z uwzględnieniem DnD
