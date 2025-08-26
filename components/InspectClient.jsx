@@ -50,7 +50,7 @@ function arrayMove(arr, from, to) {
   return a;
 }
 
-// uchwyty rozmiaru – WYŁĄCZONE, zostawiamy komponent (może się przydać)
+// uchwyty rozmiaru – WYŁĄCZONE, zostawiam komponent (może się przydać)
 const HandleDots = ({ r, active, onMouseDown }) =>
   active && SHOW_HANDLES ? (
     <>
@@ -87,7 +87,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [viewport, setViewport] = useState({ width: 0, height: 0, transform: [1, 0, 0, 1, 0, 0] });
   const [error, setError] = useState(null);
 
-  // nazwa dokumentu (CSV) + twardy reload
+  // nazwa dokumentu (CSV/XLSX) + twardy reload
   const [docName, setDocName] = useState("file");
   const [reloadTick, setReloadTick] = useState(0);
 
@@ -105,6 +105,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [pageData, setPageData] = useState({});
   const [tableOrders, setTableOrders] = useState({}); // { [page]: { [ti]: {row:[...], col:[...] } } }
   const [autoBuild, setAutoBuild] = useState(true);
+  const [smartDetect, setSmartDetect] = useState(true); // NOWE: inteligentne wykrywanie wierszy/kolumn z tekstu
   const [manualLinks, setManualLinks] = useState({}); // { [page]: { [ti]: { addRows:[rect], addCols:[rect] } } }
 
   // podglądy DnD
@@ -312,8 +313,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     if (!entry || !pdfjs) return [];
     const { items, vpTransform } = entry;
     const Util = pdfjs.Util;
-    return items.map((it) => {
-      const T = Util.transform(vpTransform, it.transform || [1, 0, 0, 1, 0, 0]);
+    return (items || []).map((it) => {
+      const T = Util.transform(vpTransform || [1,0,0,1,0,0], it.transform || [1, 0, 0, 1, 0, 0]);
       const x = T[4];
       const w = (it.width ?? 0) || Math.hypot(T[0], T[2]);
       const h = Math.hypot(T[1], T[3]);
@@ -329,10 +330,82 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return picked.map((bx) => bx.it.str).join(" ");
   }, []);
 
-  // zbuduj tabele (obsługuje autoBuild + manualLinks)
+  // --- SMART DETECT: heurystyczne wyznaczanie wierszy/kolumn z boksów tekstu
+  const inferGrid = useCallback((tableRect, boxes) => {
+    const words = boxes.filter((bx) => {
+      const cx = bx.x + bx.w / 2, cy = bx.y + bx.h / 2;
+      return pointInRect(cx, cy, tableRect);
+    });
+    if (words.length < 2) return { rows: [tableRect], cols: [tableRect] };
+
+    // metryki
+    const avgH = words.reduce((s, w) => s + w.h, 0) / words.length;
+    const avgW = words.reduce((s, w) => s + w.w, 0) / words.length;
+    const rowTh = Math.max(6, avgH * 0.7);
+    const colTh = Math.max(6, avgW * 0.7);
+
+    // klastrowanie po Y (wiersze)
+    const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h }));
+    yItems.sort((a, b) => a.y - b.y);
+    const rowClusters = [];
+    for (const it of yItems) {
+      const last = rowClusters[rowClusters.length - 1];
+      if (!last) rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y] });
+      else {
+        const mean = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
+        if (Math.abs(it.y - mean) <= rowTh) {
+          last.yMin = Math.min(last.yMin, it.y0);
+          last.yMax = Math.max(last.yMax, it.y1);
+          last.ys.push(it.y);
+        } else {
+          rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y] });
+        }
+      }
+    }
+    const rows = rowClusters.map(c => ({
+      x: tableRect.x,
+      y: Math.max(tableRect.y, c.yMin),
+      w: tableRect.w,
+      h: Math.min(tableRect.y + tableRect.h, c.yMax) - Math.max(tableRect.y, c.yMin),
+    })).filter(r => r.h > 2);
+
+    // klastrowanie po X (kolumny)
+    const xItems = words.map(w => ({ x: w.x + w.w / 2, x0: w.x, x1: w.x + w.w }));
+    xItems.sort((a, b) => a.x - b.x);
+    const colClusters = [];
+    for (const it of xItems) {
+      const last = colClusters[colClusters.length - 1];
+      if (!last) colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
+      else {
+        const mean = last.xs.reduce((s, v) => s + v, 0) / last.xs.length;
+        if (Math.abs(it.x - mean) <= colTh) {
+          last.xMin = Math.min(last.xMin, it.x0);
+          last.xMax = Math.max(last.xMax, it.x1);
+          last.xs.push(it.x);
+        } else {
+          colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
+        }
+      }
+    }
+    const cols = colClusters.map(c => ({
+      x: Math.max(tableRect.x, c.xMin),
+      y: tableRect.y,
+      w: Math.min(tableRect.x + tableRect.w, c.xMax) - Math.max(tableRect.x, c.xMin),
+      h: tableRect.h,
+    })).filter(c => c.w > 2);
+
+    return {
+      rows: rows.length ? rows : [tableRect],
+      cols: cols.length ? cols : [tableRect],
+    };
+  }, []);
+
+  // zbuduj tabele (obsługuje autoBuild + manualLinks + smartDetect)
   const buildTablesForPage = useCallback((page) => {
     const sels = selections[page] || [];
     if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
+
+    const boxesAll = getTextBoxesForPage(page);
 
     const tables = [], rows = [], cols = [];
     for (const s of sels) {
@@ -358,7 +431,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         })
         .sort((a, b) => a.rectPx.x - b.rectPx.x)
         .map((c) => c.rectPx);
-      return { rect: tRect, rows: inRows.length ? inRows : [tRect], cols: inCols.length ? inCols : [tRect] };
+      return { rect: tRect, rows: inRows, cols: inCols };
     });
 
     // implicit table jeśli brak TABLE, ale są row+col i autoBuild
@@ -372,13 +445,37 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       baseTables = [{ rect: tRect, rows: inRows, cols: inCols }];
     }
 
-    // włącz manualnie dopięte z „Loose”
+    // jeśli nadal brak TABLE, a smartDetect włączony — zbuduj z obszaru tekstu
+    if (baseTables.length === 0 && smartDetect && boxesAll.length > 0) {
+      const x0 = Math.min(...boxesAll.map(b => b.x));
+      const y0 = Math.min(...boxesAll.map(b => b.y));
+      const x1 = Math.max(...boxesAll.map(b => b.x + b.w));
+      const y1 = Math.max(...boxesAll.map(b => b.y + b.h));
+      const tRect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+      baseTables = [{ rect: tRect, rows: [], cols: [] }];
+    }
+
+    // manualnie dopięte z „Loose”
     const manual = manualLinks[page] || {};
     baseTables = baseTables.map((Tb, ti) => {
       const add = manual[ti] || { addRows: [], addCols: [] };
       const rowsMerged = [...Tb.rows, ...add.addRows].sort((a,b)=>a.y - b.y);
       const colsMerged = [...Tb.cols, ...add.addCols].sort((a,b)=>a.x - b.x);
       return { ...Tb, rows: rowsMerged, cols: colsMerged };
+    });
+
+    // SMART DETECT: jeśli w tabeli brakuje rows/cols, wyprowadź je z tekstu
+    baseTables = baseTables.map((Tb) => {
+      if (!smartDetect) return Tb;
+      const needRows = (Tb.rows?.length || 0) === 0;
+      const needCols = (Tb.cols?.length || 0) === 0;
+      if (!needRows && !needCols) return Tb;
+      const inferred = inferGrid(Tb.rect, boxesAll);
+      return {
+        ...Tb,
+        rows: needRows ? inferred.rows : Tb.rows,
+        cols: needCols ? inferred.cols : Tb.cols,
+      };
     });
 
     // policz Loose: tylko te, które NIE trafiły do żadnej tabeli (auto ani manualnie)
@@ -398,7 +495,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     }
 
     return { tables: baseTables, loose };
-  }, [selections, viewport.width, viewport.height, autoBuild, manualLinks]);
+  }, [selections, viewport.width, viewport.height, autoBuild, smartDetect, manualLinks, getTextBoxesForPage, inferGrid]);
 
   // tekst w komórkach
   useEffect(() => {
@@ -413,14 +510,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         const boxes = getTextBoxesForPage(p);
 
         const tablesOut = structure.tables.map((T) => {
-          const cells = T.rows.map((rr) =>
-            T.cols.map((cc) => {
+          const cells = (T.rows.length ? T.rows : [T.rect]).map((rr) =>
+            (T.cols.length ? T.cols : [T.rect]).map((cc) => {
               const rc = rectIntersection(T.rect, rr);
               const cellRect = rc ? rectIntersection(rc, cc) : null;
               return cellRect ? collectTextInRect(cellRect, boxes) : "";
             })
           );
-          return { rect: T.rect, rows: T.rows, cols: T.cols, cells };
+          return { rect: T.rect, rows: T.rows.length ? T.rows : [T.rect], cols: T.cols.length ? T.cols : [T.rect], cells };
         });
 
         const looseOut = structure.loose.map((frag) => ({
@@ -433,7 +530,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     });
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, buildTablesForPage, getTextBoxesForPage, collectTextInRect]);
 
-  // domyślne kolejności (także po dopięciu z Loose)
+  // domyślne kolejności (także po dopięciu/wykryciu)
   useEffect(() => {
     setTableOrders((prev) => {
       const out = { ...prev };
@@ -456,13 +553,27 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
-  // CSV builder
-  function buildCSV(rows) {
-    return rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  // CSV/XLSX helpers
+  function buildCSV(rows) { return rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n"); }
+  async function buildAndDownloadXLSX(rows, filenameBase) {
+    const XLSX = await import("xlsx");
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${filenameBase}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
-  // eksport CSV (z kolejnością DnD)
-  const handleExportCSV = async () => {
+  // zebrane wiersze z uwzględnieniem DnD
+  const collectOrderedRows = useCallback(() => {
     const rows = [];
     const pages = Object.keys(pageData).map((n) => +n)
       .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
@@ -479,8 +590,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       });
       if (d.loose?.length) d.loose.forEach((frag) => rows.push([frag.text || ""]));
     }
-
     if (rows.length === 0) rows.push([]);
+    return rows;
+  }, [pageData, tableOrders]);
+
+  // eksport CSV / XLSX
+  const handleExportCSV = async () => {
+    const rows = collectOrderedRows();
     const csv = buildCSV(rows);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -492,6 +608,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  };
+  const handleExportXLSX = async () => {
+    const rows = collectOrderedRows();
+    const base = String(docName || "file").replace(/\.[^.]+$/, "");
+    await buildAndDownloadXLSX(rows, base);
   };
 
   // --- UI ---
@@ -525,15 +646,22 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => { setActiveIndex(-1); setPageNum((n)=>Math.min(pageCount, n+1)); }}>Next &gt;</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => setReloadTick((t) => t + 1)}>Reload</button>
 
-        <div className="ml-auto flex items-center gap-4">
+        <div className="ml-auto flex flex-wrap items-center gap-4">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={autoBuild} onChange={(e)=>setAutoBuild(e.target.checked)} />
             Auto-build table from row/col
           </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={smartDetect} onChange={(e)=>setSmartDetect(e.target.checked)} />
+            Smart-detect rows/cols
+          </label>
+
           <Legend label="Table" color={COLORS.table[0]} />
           <Legend label="Column" color={COLORS.column[0]} />
           <Legend label="Row" color={COLORS.row[0]} />
+
           <button onClick={handleExportCSV} className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700">Export CSV</button>
+          <button onClick={handleExportXLSX} className="px-4 py-2 rounded-md text-white font-semibold bg-indigo-600 hover:bg-indigo-700">Export XLSX</button>
         </div>
       </div>
 
@@ -599,7 +727,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
 
           {currentPageData.tables.length === 0 && currentPageData.loose.length === 0 ? (
-            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE, albo włącz Auto-build i dodaj ROW/COLUMN.</div>
+            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE, włącz Auto-build (row/col), albo włącz Smart-detect.</div>
           ) : null}
 
           {currentPageData.tables.map((T, ti) => {
@@ -654,7 +782,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             const onDragLeaveZone = (zone) => (e) => {
               e.preventDefault();
               if (!draggingLoose) return;
-              // jeśli wychodzimy z aktywnej strefy, czyść
               setDragHover((h) => (h && h.table === ti && h.zone === zone ? null : h));
             };
 
