@@ -2,7 +2,7 @@
 import OpenAI from "openai";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic"; // upewnia się, że route nie będzie prerenderowany
+export const dynamic = "force-dynamic";
 
 const J = (b, s = 200) =>
   new Response(JSON.stringify(b), {
@@ -10,86 +10,85 @@ const J = (b, s = 200) =>
     headers: { "Content-Type": "application/json" },
   });
 
-// Lazy, singleton client (bez tworzenia w top-level)
 let _client = null;
 function getOpenAI() {
   const key = process.env.OPENAI_API_KEY;
   if (!key) {
-    throw new Error(
-      "OpenAI API key not configured. Set the OPENAI_API_KEY environment variable."
-    );
+    const hint =
+      "OPENAI_API_KEY is missing in runtime. Add it in Netlify → Site settings → Build & deploy → Environment variables (All contexts) and redeploy.";
+    const err = new Error(hint);
+    err.expose = true;
+    throw err;
   }
-  if (!_client) {
-    _client = new OpenAI({ apiKey: key });
-  }
+  if (!_client) _client = new OpenAI({ apiKey: key });
   return _client;
 }
 
-// AI parsing function using OpenAI
 async function parseWithAI(text) {
-  // Create a prompt for the AI to parse bank statement transactions
-  const prompt = `
-Parse the following bank statement text and extract transaction details in JSON format.
-Each transaction should have the following fields:
-- Date: Transaction date in YYYY-MM-DD format
-- Description: Transaction description
-- Amount: Transaction amount (positive for credits, negative for debits)
-- Balance: Account balance after transaction (if available)
-- Reference Number: Transaction reference number (if available)
+  const client = getOpenAI();
 
-Bank statement text:
-${text}
-
-Please provide the response in JSON format as an array of transaction objects.
-`;
-
-  const openai = getOpenAI();
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini", // nowszy, tańszy i lepszy niż 3.5
+  // Krótki system + user. Model nowy i tani.
+  const resp = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    temperature: 0.2,
+    max_tokens: 2000,
     messages: [
       {
         role: "system",
         content:
-          "You are a specialized assistant that extracts bank transaction data from statements and converts it into structured JSON format. You should extract all available transaction details including dates, descriptions, amounts, balances, and reference numbers when present.",
+          "Extract bank transactions as JSON array. Fields: Date (YYYY-MM-DD), Description, Credit, Debit, Amount, Balance, Currency, Reference Number, Reference 1, Reference 2, Transaction Type, Transaction Category, Branch, Sender/Receiver Name, Source Date, Source Statement Page.",
       },
-      { role: "user", content: prompt },
+      {
+        role: "user",
+        content:
+          `Parse the following bank statement text and return ONLY JSON array of transaction objects (no commentary):\n\n${text}`,
+      },
     ],
-    temperature: 0.3,
-    max_tokens: 2000,
   });
 
-  const content = (response.choices?.[0]?.message?.content || "").trim();
+  const content = (resp.choices?.[0]?.message?.content || "").trim();
 
-  // Spróbuj sparsować czysty JSON
+  // Spróbuj czysty JSON, potem ```json
   try {
     return JSON.parse(content);
   } catch {
-    // Lub wyciągnij JSON z bloku ```json
-    const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (jsonMatch?.[1]) {
-      return JSON.parse(jsonMatch[1]);
-    }
-    throw new Error("AI response is not valid JSON.");
+    const m = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (m?.[1]) return JSON.parse(m[1]);
+    const e = new Error("Model did not return valid JSON.");
+    e.expose = true;
+    throw e;
   }
 }
 
 export async function POST(request) {
   try {
     const data = await request.json().catch(() => null);
-    if (!data) return J({ error: "Invalid JSON body." }, 400);
+    if (!data || typeof data.text !== "string" || !data.text.trim())
+      return J({ error: "Missing 'text' in JSON body." }, 400);
 
-    const { text } = data;
-    if (!text) return J({ error: "Missing text." }, 400);
+    // Prosta gardziel na zbyt duże payloady
+    if (data.text.length > 800_000) {
+      return J({
+        error:
+          "Input text too large for single request. Consider splitting per page.",
+      }, 413);
+    }
 
-    const transactions = await parseWithAI(text);
+    const transactions = await parseWithAI(data.text);
+    if (!Array.isArray(transactions))
+      return J({ error: "AI did not return an array of transactions." }, 502);
+
     return J({ transactions });
   } catch (e) {
     console.error("[/api/ai-parse] error:", e);
-    const msg = e?.message || "Unknown error";
-    return J(
-      { error: "AI parsing failed: " + msg, details: e?.stack || null },
-      500
-    );
+    // Jeżeli błąd jest “bezpieczny do pokazania”, zwróć użytkownikowi.
+    if (e?.expose) return J({ error: e.message }, 500);
+
+    // Błędy z OpenAI mają zwykle response?.data?.error
+    const msg =
+      e?.response?.data?.error?.message ||
+      e?.message ||
+      "Unknown error calling OpenAI";
+    return J({ error: "AI parsing failed: " + msg }, 500);
   }
 }
