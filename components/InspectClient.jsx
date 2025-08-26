@@ -480,6 +480,31 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
 
   const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
+  // --- CSV builder (wyodrębniony, z mini-testami w DEV) ---
+  function buildCSV(rows) {
+    return rows
+      .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+  }
+
+  if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+    // proste testy w przeglądarce, tylko w DEV
+    (function runCsvTests() {
+      try {
+        const rows1 = [["a", "b"], ["c", "d"]];
+        const out1 = buildCSV(rows1);
+        console.assert(out1 === '"a","b"\n"c","d"', "CSV: podstawowy join z LF");
+
+        const rows2 = [["a,b", "c"], ['He said "Hi"']];
+        const out2 = buildCSV(rows2);
+        console.assert(out2.includes('"a,b"'), "CSV: przecinek powinien być w cudzysłowie");
+        console.assert(out2.includes('"He said ""Hi"""'), "CSV: cudzysłowy powinny być zdublowane");
+      } catch (e) {
+        console.warn("CSV self-tests failed:", e);
+      }
+    })();
+  }
+
   // export CSV
   const handleExportCSV = async () => {
     const pages = Object.keys(pageData)
@@ -506,10 +531,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     }
     if (rows.length === 0) rows.push(["page", "table/loose", "row", "value..."]);
 
-    const csv = rows
-      .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
-      .join("
-");
+    const csv = buildCSV(rows);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -522,7 +544,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   };
 
   return (
-
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="text-sm px-2 py-1 border rounded">Page {pageNum}/{pageCount}</div>
