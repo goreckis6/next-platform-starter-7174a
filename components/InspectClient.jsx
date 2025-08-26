@@ -90,6 +90,25 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   // per page: { tables: [...], loose: [...] }
   const [pageData, setPageData] = useState({});
 
+  // helper: wyciąganie nazwy pliku z URL lub propsa
+  const deriveDocName = useCallback(() => {
+    if (typeof pdfNameProp === "string" && pdfNameProp.trim()) return pdfNameProp.trim();
+
+    let name = "";
+    if (typeof pdfUrl === "string" && pdfUrl) {
+      try {
+        const u = new URL(pdfUrl, typeof window !== "undefined" ? window.location.href : "http://local");
+        name = (u.pathname.split("/").pop() || "").split("?")[0];
+      } catch {
+        name = pdfUrl.split("/").pop() || "";
+      }
+    }
+    if (!name && pdfData && typeof pdfData === "object" && "name" in pdfData && pdfData.name) {
+      name = String(pdfData.name);
+    }
+    return name || "file.pdf";
+  }, [pdfNameProp, pdfUrl, pdfData]);
+
   // init pdf.js + worker
   useEffect(() => {
     let mounted = true;
@@ -140,7 +159,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
       setPageData({});
 
       try {
-        const bustUrl = (u) => (typeof u === "string" ? `${u}${u.includes("?") ? "&" : "?"}ts=${Date.now()}` : u);
+        const name = deriveDocName();
+        setDocName(name);
+
+        const bustUrl = (u) => (typeof u === "string" ? `${u}${u.includes("?") ? "&" : "?"}ts=${Date.now()}-${reloadTick}` : u);
         const params = pdfData ? { data: pdfData } : { url: bustUrl(pdfUrl), httpHeaders: { "Cache-Control": "no-cache" } };
         const doc = await pdfjs.getDocument(params).promise;
         if (!mounted) return;
@@ -159,7 +181,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     return () => {
       mounted = false;
     };
-  }, [pdfUrl, pdfData, pdfjs]);
+  }, [pdfUrl, pdfData, pdfjs, reloadTick, deriveDocName]);
 
   // render + cache text with viewport transform
   const renderPage = useCallback(async () => {
@@ -536,7 +558,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `values-${uuid || "file"}.csv`;
+    const base = String(docName || "file").replace(/\.[^.]+$/, "");
+    a.download = `${base}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -577,6 +600,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>[-] Zoom</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>&lt; Prev</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>Next &gt;</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => setReloadTick((t) => t + 1)}>Reload</button>
 
         <div className="ml-auto flex items-center gap-2">
           <Legend label="Table" color={COLORS.table[0]} />
