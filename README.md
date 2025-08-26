@@ -67,7 +67,40 @@ To use the AI parsing feature with ChatGPT:
 2. Set the `OPENAI_API_KEY` environment variable with your API key
 3. The AI parsing will automatically use ChatGPT to extract transaction data
 
-The AI parsing feature provides better results for complex bank statements by using advanced algorithms to identify and extract transaction data more accurately. It completely replaces the heuristic parsing with AI-based parsing for more accurate results.
+The AI parsing feature provides better results for complex bank statements by using advanced algorithms to identify and extract transaction data more accurately. It completely replaces any previous parsing methods with AI-based parsing for more accurate results.
+
+To use the AI parsing feature, you need to set up an OpenAI API key:
+1. Get an API key from https://platform.openai.com/
+2. Set the `OPENAI_API_KEY` environment variable with your API key
+3. The AI parsing will automatically use ChatGPT to extract transaction data
+
+You can run `npm run setup` to see instructions for setting up the environment variables.
+
+To set up the environment variables:
+1. Copy the `.env.example` file to `.env` (you can use `npm run env:copy` to do this)
+2. Replace `your-openai-api-key-here` with your actual OpenAI API key
+
+You can check if the `.env` file exists by running `npm run env:check`.
+
+To start the development server with a check for the `.env` file, run `npm run dev:check`.
+
+To build the project with a check for the `.env` file, run `npm run build:check`.
+
+To start the production server with a check for the `.env` file, run `npm run start:check`.
+
+To lint the project with a check for the `.env` file, run `npm run lint:check`.
+
+To run all checks (environment, linting, and build), run `npm run check:all`.
+
+To clean the project (remove build artifacts), run `npm run clean`.
+
+To clean and rebuild the project, run `npm run clean:build`.
+
+To clean, check, and rebuild the project, run `npm run clean:check:build`.
+
+## Security Considerations
+
+The `.env` file contains sensitive information and should never be committed to the repository. Make sure to keep your OpenAI API key secure and never share it publicly.
 
 ## Testing
 

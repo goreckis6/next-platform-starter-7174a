@@ -6,7 +6,7 @@ const J = (b, s=200) => new Response(JSON.stringify(b), { status: s, headers: { 
 
 // Initialize OpenAI client
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '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', // Add your API key in environment variables
+  apiKey: process.env.OPENAI_API_KEY, // Add your API key in environment variables
 });
 
 // AI parsing function using OpenAI
@@ -19,6 +19,8 @@ async function parseWithAI(text) {
     - Date: Transaction date in YYYY-MM-DD format
     - Description: Transaction description
     - Amount: Transaction amount (positive for credits, negative for debits)
+    - Balance: Account balance after transaction (if available)
+    - Reference Number: Transaction reference number (if available)
     
     Bank statement text:
     ${text}
@@ -32,7 +34,7 @@ async function parseWithAI(text) {
       messages: [
         {
           role: "system",
-          content: "You are a helpful assistant that parses bank statement text into structured JSON data."
+          content: "You are a specialized assistant that extracts bank transaction data from statements and converts it into structured JSON format. You should extract all available transaction details including dates, descriptions, amounts, balances, and reference numbers when present."
         },
         {
           role: "user",
@@ -59,10 +61,10 @@ async function parseWithAI(text) {
           return transactions;
         } catch (innerParseError) {
           console.error("Error parsing AI response:", innerParseError);
-          throw new Error("Failed to parse AI response as JSON");
+          throw new Error("Failed to parse AI response as JSON: " + innerParseError.message);
         }
       } else {
-        throw new Error("AI response is not valid JSON");
+        throw new Error("AI response is not valid JSON and does not contain a JSON code block");
       }
     }
   } catch (error) {
@@ -93,7 +95,8 @@ export async function POST(request) {
   } catch (e) {
     console.error("[/api/ai-parse] error:", e);
     return J({
-      error: "AI parsing failed: " + (e.message || "Unknown error")
+      error: "AI parsing failed: " + (e.message || "Unknown error"),
+      details: e.stack || "No stack trace available"
     }, 500);
   }
 }

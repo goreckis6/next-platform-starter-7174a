@@ -136,8 +136,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   // DOMYŚLNE: Date, Description, Debit, Balance
   const [selectedCols, setSelectedCols] = useState(new Set(["Date", "Description", "Debit", "Balance"]));
 
-  // Mapowanie wierszy -> kolumny (heurystyka)
-  const [mapDetectedRows, setMapDetectedRows] = useState(true);
 
   const toggleCol = (label) =>
     setSelectedCols((prev) => {
@@ -694,229 +692,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     }
   }
 
-  // ====== TRANSACTION PARSER (heurystyka) ======
-  const MONTHS_EN = {
-    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
-    jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
-  };
-
-  function parseDateHeuristic(s) {
-    const str = s.trim();
-
-    // 1) Feb 17, 2025 / Feb 17 2025
-    const m1 = str.match(/\b([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})\b/);
-    if (m1) {
-      const mon = MONTHS_EN[m1[1].slice(0,3).toLowerCase()];
-      if (mon) return `${m1[3]}-${String(mon).padStart(2,'0')}-${String(m1[2]).padStart(2,'0')}`;
-    }
-
-    // 2) 17/02/2025 or 17-02-2025 or 17.02.2025
-    const m2 = str.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/);
-    if (m2) {
-      const dd = +m2[1], mm = +m2[2], yyyy = m2[3].length === 2 ? +(`20${m2[3]}`) : +m2[3];
-      if (mm<=12 && dd<=31) return `${yyyy}-${String(mm).padStart(2,'0')}-${String(dd).padStart(2,'0')}`;
-    }
-
-    // 3) 2025-02-17
-    const m3 = str.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/);
-    if (m3) {
-      return `${m3[1]}-${String(m3[2]).padStart(2,'0')}-${String(m3[3]).padStart(2,'0')}`;
-    }
-
-    return null;
-  }
-
-  function normalizeNumberToken(tok) {
-    let t = tok.replace(/\s+/g, '').replace(/[$€£zł]|PLN|USD|EUR/gi, '');
-    let neg = false;
-    if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1,-1); }
-    if (t.includes(',') && t.includes('.')) {
-      const lastComma = t.lastIndexOf(',');
-      const lastDot = t.lastIndexOf('.');
-      if (lastComma > lastDot) {
-        t = t.replace(/\./g, '').replace(',', '.');
-      } else {
-        t = t.replace(/,/g, '');
-      }
-    } else if (t.includes(',')) {
-      const parts = t.split(',');
-      if (parts[parts.length - 1].length === 2) {
-        t = t.replace(/\./g, '').replace(/\s/g,'').replace(',', '.');
-      } else {
-        t = t.replace(/,/g, '');
-      }
-    } else {
-      t = t.replace(/,/g, '');
-    }
-    const val = parseFloat(t);
-    if (isNaN(val)) return null;
-    return neg ? -val : val;
-  }
-
-  function detectCurrency(s) {
-    const m = s.match(/\b(PLN|USD|EUR)\b|[€$]|zł/gi);
-    if (!m) return null;
-    const hit = m[0].toUpperCase();
-    if (hit.includes('PLN') || hit.includes('ZŁ')) return 'PLN';
-    if (hit.includes('EUR') || hit.includes('€')) return 'EUR';
-    if (hit.includes('USD') || hit.includes('$')) return 'USD';
-    return null;
-  }
-
-  // Enhanced function to parse multiple transactions from a single line
-  function parseMultipleTransactions(line) {
-    const src = (line || '').replace(/\s{2,}/g, ' ').trim();
-    if (!src) return [{}];
-
-    // Special pattern for bank statements with two transactions in one row
-    // Pattern: Date Description Amount Date Description Ref Number Amount
-    const bankStatementPattern = /^(\S+\s+\d{1,2},?\s+\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})\s+(.+?)\s+(-?[\d,.$€£złPLNEURUSD]+)\s+(\S+\s+\d{1,2},?\s+\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})\s+(.+?)\s+(\S+)\s+(-?[\d,.$€£złPLNEURUSD]+)$/;
-    const match = src.match(bankStatementPattern);
-    
-    if (match) {
-      // Extract first transaction
-      const firstDate = match[1];
-      const firstDesc = match[2];
-      const firstAmount = match[3];
-      
-      // Extract second transaction
-      const secondDate = match[4];
-      const secondDesc = match[5];
-      const refNumber = match[6];
-      const secondAmount = match[7];
-      
-      // Parse amounts
-      const firstParsedAmount = normalizeNumberToken(firstAmount);
-      const secondParsedAmount = normalizeNumberToken(secondAmount);
-      
-      // Format dates
-      const firstFormattedDate = parseDateHeuristic(firstDate);
-      const secondFormattedDate = parseDateHeuristic(secondDate);
-      
-      return [
-        {
-          "Date": firstFormattedDate,
-          "Description": firstDesc,
-          "Amount": firstParsedAmount,
-          "Debit": firstParsedAmount < 0 ? Math.abs(firstParsedAmount) : null,
-          "Credit": firstParsedAmount > 0 ? firstParsedAmount : null
-        },
-        {
-          "Date": secondFormattedDate,
-          "Description": secondDesc,
-          "Amount": secondParsedAmount,
-          "Debit": secondParsedAmount < 0 ? Math.abs(secondParsedAmount) : null,
-          "Credit": secondParsedAmount > 0 ? secondParsedAmount : null,
-          "Reference Number": refNumber
-        }
-      ];
-    }
-
-    // Look for multiple date patterns which might indicate multiple transactions
-    const datePatterns = [
-      /\b([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})\b/g,
-      /\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/g,
-      /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g
-    ];
-
-    let dateMatches = [];
-    for (const pattern of datePatterns) {
-      let match;
-      while ((match = pattern.exec(src)) !== null) {
-        dateMatches.push({
-          match: match[0],
-          index: match.index,
-          fullMatch: match
-        });
-      }
-    }
-
-    // Sort by position in string
-    dateMatches.sort((a, b) => a.index - b.index);
-
-    // If we found multiple dates, split the line into multiple transactions
-    if (dateMatches.length > 1) {
-      const transactions = [];
-      for (let i = 0; i < dateMatches.length; i++) {
-        const start = dateMatches[i].index;
-        const end = i < dateMatches.length - 1 ? dateMatches[i + 1].index : src.length;
-        const segment = src.substring(start, end).trim();
-        const parsed = parseSingleTransaction(segment);
-        if (Object.keys(parsed).length > 0) {
-          transactions.push(parsed);
-        }
-      }
-      return transactions.length > 0 ? transactions : [parseSingleTransaction(src)];
-    }
-
-    // If only one or no dates, parse as single transaction
-    return [parseSingleTransaction(src)];
-  }
-
-  // Original single transaction parser, renamed for clarity
-  function parseSingleTransaction(line) {
-    const src = (line || '').replace(/\s{2,}/g, ' ').trim();
-    if (!src) return {};
-
-    const dt = parseDateHeuristic(src);
-
-    const numTokens = [];
-    const tokenRegex = /-?\(?\d[\d\s.,]*\)?/g;
-    let m;
-    while ((m = tokenRegex.exec(src)) !== null) {
-      const n = normalizeNumberToken(m[0]);
-      if (n !== null) numTokens.push({ raw: m[0], val: n, start: m.index, end: m.index + m[0].length });
-    }
-
-    let balance = null, amount = null;
-    if (numTokens.length >= 1) {
-      balance = numTokens[numTokens.length - 1].val;
-    }
-    if (numTokens.length >= 2) {
-      amount = numTokens[numTokens.length - 2].val;
-    }
-
-    const currency = detectCurrency(src);
-
-    let credit = null, debit = null;
-    if (amount !== null) {
-      if (amount < 0) debit = Math.abs(amount);
-      else credit = amount;
-    }
-
-    let desc = src;
-    if (dt) {
-      const dMonth = Object.keys(MONTHS_EN).find(k => new RegExp(`\\b${k}`, 'i').test(src));
-      if (dMonth) {
-        desc = desc.replace(/\b([A-Za-z]{3,})\s+\d{1,2},?\s+20\d{2}\b/, '').trim();
-      } else {
-        desc = desc.replace(/\b\d{1,2}[./-]\d{1,2}[./-]\d{2,4}\b/, '').trim();
-        desc = desc.replace(/\b20\d{2}-\d{1,2}-\d{1,2}\b/, '').trim();
-      }
-    }
-    if (numTokens.length) {
-      const last = numTokens[numTokens.length - 1];
-      desc = desc.slice(0, last.start).trim();
-    }
-    desc = desc.replace(/\s{2,}/g, ' ').replace(/[•·]+/g, '').trim();
-
-    const out = {};
-    if (dt) out["Date"] = dt;
-    if (desc) out["Description"] = desc;
-    if (credit !== null) out["Credit"] = credit;
-    if (debit !== null) out["Debit"] = debit;
-    if (amount !== null) out["Amount"] = amount;
-    if (balance !== null) out["Balance"] = balance;
-    if (currency) out["Currency"] = currency;
-
-    return out;
-  }
-
-  // Updated single transaction parser that uses the enhanced logic
-  function parseTransactionLine(line) {
-    const transactions = parseMultipleTransactions(line);
-    return transactions[0] || {};
-  }
 
   // ===== AI Parsing Function =====
   const parseWithAI = async (text) => {
@@ -938,8 +713,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       return data.transactions || [];
     } catch (error) {
       console.error("AI parsing error:", error);
-      alert("AI parsing failed. Falling back to heuristic parsing.");
-      return [];
+      alert("AI parsing failed. Please check your OpenAI API key and try again.");
+      throw error; // Re-throw the error to be handled by the caller
     } finally {
       setIsParsing(false);
     }
@@ -1384,19 +1159,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                       {label}
                     </label>
                   ))}
-                </div>
-                <div className="mt-3">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={mapDetectedRows}
-                      onChange={(e)=>setMapDetectedRows(e.target.checked)}
-                    />
-                    Try to map detected rows to selected columns
-                  </label>
-                  <p className="text-xs text-gray-500">
-                    Heurystyka: data, kwoty (Amount/Credit/Debit), saldo (Balance), waluta, opis (Description).
-                  </p>
                 </div>
               </div>
             </div>

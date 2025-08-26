@@ -4,9 +4,21 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:check": "npm run env:check && next dev",
     "build": "next build",
+    "build:check": "npm run env:check && next build",
     "start": "next start",
-    "lint": "next lint"
+    "start:check": "npm run env:check && next start",
+    "lint": "next lint",
+    "lint:check": "npm run env:check && next lint",
+    "check:all": "npm run env:check && npm run lint && npm run build",
+    "clean": "rm -rf .next out build",
+    "clean:build": "npm run clean && npm run build",
+    "clean:check:build": "npm run clean && npm run check:all && npm run build",
+    "clean:check:dev": "npm run clean && npm run check:all && npm run dev",
+    "setup": "echo 'Set the OPENAI_API_KEY environment variable to use AI parsing'",
+    "env:copy": "cp .env.example .env",
+    "env:check": "test -f .env && echo '.env file exists' || echo '.env file does not exist. Run npm run env:copy to create it.'"
   },
   "dependencies": {
     "@netlify/blobs": "^8.2.0",
