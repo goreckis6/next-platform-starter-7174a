@@ -1,3 +1,22 @@
+# netlify.toml
+
 [build]
-  publish = ".next"
   command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  # opcjonalnie: NEXT_TELEMETRY_DISABLED = "1"
+
+# Netlify Functions (pewniak dla envów i timeoutów)
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  # dzięki temu Netlify nie będzie próbował bundlować openai poza paczkę
+  external_node_modules = ["openai"]
+
+# Redirect API route z Next.js na Netlify Function
+[[redirects]]
+  from = "/api/ai-parse"
+  to = "/.netlify/functions/ai-parse"
+  status = 200
