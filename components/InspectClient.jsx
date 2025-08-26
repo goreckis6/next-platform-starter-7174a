@@ -63,7 +63,7 @@ const HandleDots = ({ r, active, onMouseDown }) =>
     </>
   ) : null;
 
-export default function InspectClient({ pdfUrl, pdfData, uuid }) {
+export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameProp }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -74,6 +74,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid }) {
   const [scale, setScale] = useState(1.25);
   const [viewport, setViewport] = useState({ width: 0, height: 0, transform: [1, 0, 0, 1, 0, 0] });
   const [error, setError] = useState(null);
+
+  // nazwa dokumentu (dla CSV)
+  const [docName, setDocName] = useState("file");
+  // licznik do twardego przeładowania PDF-a
+  const [reloadTick, setReloadTick] = useState(0);
 
   // cache: { [page]: { items, viewportTransform } }
   const [textCache, setTextCache] = useState({});
