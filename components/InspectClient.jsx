@@ -16,9 +16,9 @@ const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h 
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
 // ustawienia
-const EPS = 0.25;         // ciasna tolerancja
-const OVERLAP_T = 0.35;   // min. pokrycie ROW/COL w TABLE (0..1)
-const SHOW_HANDLES = false; // ukryj „kropki”
+const EPS = 0.25;            // ciasna tolerancja
+const OVERLAP_T = 0.35;      // min. pokrycie ROW/COL w TABLE (0..1)
+const SHOW_HANDLES = false;  // ukryj „kropki”
 
 // --- geom utils ---
 function pointInRect(px, py, r) {
@@ -50,7 +50,7 @@ function arrayMove(arr, from, to) {
   return a;
 }
 
-// uchwyty rozmiaru – WYŁĄCZONE (SHOW_HANDLES=false)
+// uchwyty rozmiaru – WYŁĄCZONE, zostawiamy komponent (może się przydać)
 const HandleDots = ({ r, active, onMouseDown }) =>
   active && SHOW_HANDLES ? (
     <>
@@ -107,6 +107,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [autoBuild, setAutoBuild] = useState(true);
   const [manualLinks, setManualLinks] = useState({}); // { [page]: { [ti]: { addRows:[rect], addCols:[rect] } } }
 
+  // podglądy DnD
+  const [draggingLoose, setDraggingLoose] = useState(null); // {type:'row'|'column', rect}
+  const [dragHover, setDragHover] = useState(null); // { table: ti, zone: 'row'|'col' } | null
+
   // nazwa pliku z url/props
   const deriveDocName = useCallback(() => {
     if (typeof pdfNameProp === "string" && pdfNameProp.trim()) return pdfNameProp.trim();
@@ -157,6 +161,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       setPageData({});
       setTableOrders({});
       setManualLinks({});
+      setDraggingLoose(null);
+      setDragHover(null);
 
       try {
         const name = deriveDocName(); setDocName(name);
@@ -221,7 +227,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return null;
   };
 
-  // mouse draw/move/resize (uchwyty są ukryte, ale logika działa gdybyś chciał)
+  // mouse draw/move/resize (uchwyty ukryte)
   const onMouseDown = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -294,6 +300,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       if (e.key === "-") zoomOut();
       if (e.key === "<" || e.key === ",") prevPage();
       if (e.key === ">" || e.key === ".") nextPage();
+      if (e.key === "Escape") { setDraggingLoose(null); setDragHover(null); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -426,7 +433,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     });
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, buildTablesForPage, getTextBoxesForPage, collectTextInRect]);
 
-  // domyślne kolejności
+  // domyślne kolejności (także po dopięciu z Loose)
   useEffect(() => {
     setTableOrders((prev) => {
       const out = { ...prev };
@@ -530,7 +537,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[auto_520px] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_540px] gap-6">
         {/* LEFT: canvas */}
         <div
           className="relative inline-block select-none"
@@ -602,7 +609,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             const setRowOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: next, col: colOrder } } }));
             const setColOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: rowOrder, col: next } } }));
 
-            // DnD (HTML5)
+            // DnD (HTML5) kolejności
             let dragCol = -1; let dragRow = -1;
             const onColDragStart = (i)=> (e)=>{ dragCol = i; e.dataTransfer.effectAllowed = 'move'; };
             const onColDragOver  = ()=> (e)=>{ e.preventDefault(); };
@@ -619,62 +626,81 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             const orderedRows = rowOrder.length ? rowOrder : Array.from({length: T.cells.length}, (_,i)=>i);
             const orderedCols = colOrder.length ? colOrder : Array.from({length: (T.cells[0]?.length||0)}, (_,i)=>i);
 
-            // Drop z LOose: dodanie jako row/col do tej tabeli
-            const attachLoose = (type, rect) => {
+            // Dodawanie z Loose (z podglądem)
+            const acceptLoose = (typeExpected) => (e) => {
+              e.preventDefault();
+              const payload = e.dataTransfer.getData("loose");
+              if (!payload) return;
+              const data = JSON.parse(payload);
+              if (data.type !== typeExpected) return;
               setManualLinks((prev) => {
                 const next = { ...prev };
                 next[pageNum] = next[pageNum] || {};
                 const cur = next[pageNum][ti] || { addRows: [], addCols: [] };
-                if (type === "row") cur.addRows = [...cur.addRows, rect];
-                else cur.addCols = [...cur.addCols, rect];
+                if (typeExpected === "row") cur.addRows = [...cur.addRows, data.rect];
+                else cur.addCols = [...cur.addCols, data.rect];
                 next[pageNum][ti] = cur;
                 return next;
               });
+              setDraggingLoose(null);
+              setDragHover(null);
             };
 
-            const onDropRowZone = (e) => {
+            const onDragEnterZone = (zone) => (e) => {
               e.preventDefault();
-              const payload = e.dataTransfer.getData("loose");
-              if (!payload) return;
-              const data = JSON.parse(payload);
-              if (data.type !== "row") return;
-              attachLoose("row", data.rect);
+              if (!draggingLoose) return;
+              setDragHover({ table: ti, zone });
             };
-            const onDropColZone = (e) => {
+            const onDragLeaveZone = (zone) => (e) => {
               e.preventDefault();
-              const payload = e.dataTransfer.getData("loose");
-              if (!payload) return;
-              const data = JSON.parse(payload);
-              if (data.type !== "column") return;
-              attachLoose("column", data.rect);
+              if (!draggingLoose) return;
+              // jeśli wychodzimy z aktywnej strefy, czyść
+              setDragHover((h) => (h && h.table === ti && h.zone === zone ? null : h));
             };
+
+            const isHoverCol = dragHover && dragHover.table === ti && dragHover.zone === "col" && draggingLoose?.type === "column";
+            const isHoverRow = dragHover && dragHover.table === ti && dragHover.zone === "row" && draggingLoose?.type === "row";
 
             return (
               <div key={ti} className="mb-6">
                 <div className="text-sm font-medium mb-2">Table #{ti + 1} — {T.rows.length} rows × {T.cols.length} cols</div>
 
-                {/* Drop-zones do dopinania z Loose */}
+                {/* Drop-zones do dopinania z Loose (z podglądem) */}
                 <div className="flex flex-wrap gap-3 mb-2 text-xs">
                   <div
                     onDragOver={(e)=>e.preventDefault()}
-                    onDrop={onDropRowZone}
-                    className="px-2 py-1 border rounded bg-orange-50"
+                    onDragEnter={onDragEnterZone("row")}
+                    onDragLeave={onDragLeaveZone("row")}
+                    onDrop={acceptLoose("row")}
+                    className="px-2 py-1 border rounded"
+                    style={{
+                      background: isHoverRow ? "#fed7aa" : "#fff7ed",
+                      borderColor: isHoverRow ? "#ea580c" : "#fdba74",
+                      color: "#7c2d12"
+                    }}
                   >
-                    Drop <b>row</b> here
+                    {isHoverRow ? "Release to add row" : "Drop row here"}
                   </div>
                   <div
                     onDragOver={(e)=>e.preventDefault()}
-                    onDrop={onDropColZone}
-                    className="px-2 py-1 border rounded bg-green-50"
+                    onDragEnter={onDragEnterZone("col")}
+                    onDragLeave={onDragLeaveZone("col")}
+                    onDrop={acceptLoose("column")}
+                    className="px-2 py-1 border rounded"
+                    style={{
+                      background: isHoverCol ? "#bbf7d0" : "#f0fdf4",
+                      borderColor: isHoverCol ? "#16a34a" : "#86efac",
+                      color: "#14532d"
+                    }}
                   >
-                    Drop <b>column</b> here
+                    {isHoverCol ? "Release to add column" : "Drop column here"}
                   </div>
                 </div>
 
-                {/* Pasek kolumn do DnD */}
+                {/* Pasek kolumn do DnD (sortowanie) */}
                 <div className="flex items-center gap-2 mb-2 text-xs">
                   <span className="text-gray-500">Columns:</span>
-                  {(colOrder.length ? colOrder : Array.from({length:(T.cells[0]?.length||0)}, (_,i)=>i)).map((ci, idx)=> (
+                  {(orderedCols).map((ci, idx)=> (
                     <div key={ci}
                          draggable
                          onDragStart={onColDragStart(idx)}
@@ -690,14 +716,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                 <div className="overflow-auto">
                   <table className="min-w-full border text-sm">
                     <tbody>
-                      {(orderedRows).map((ri, rIdx) => (
+                      {orderedRows.map((ri, rIdx) => (
                         <tr key={ri}>
                           {orderedCols.map((ci) => (
                             <td key={ci} className="border px-2 py-1 align-top">
                               {T.cells[ri]?.[ci] || <span className="text-gray-400">—</span>}
                             </td>
                           ))}
-                          {/* uchwyt wiersza do DnD */}
+                          {/* uchwyt wiersza do DnD (sortowanie) */}
                           <td className="px-2">
                             <div
                               draggable
@@ -712,6 +738,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                           </td>
                         </tr>
                       ))}
+                      {/* placeholder wiersza gdy hover nad ROW zone */}
+                      {isHoverRow && (
+                        <tr>
+                          <td colSpan={(orderedCols.length || 1) + 1} className="px-2 py-1 border-2 border-dashed" style={{ borderColor: "#ea580c" }}>
+                            + Row will be added here
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -722,17 +756,19 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           {/* LOOSE -> draggable źródła */}
           {currentPageData.loose.length > 0 && (
             <>
-              <div className="text-sm font-medium mt-4 mb-1">Loose selections</div>
+              <div className="text-sm font-medium mt-4 mb-1">Loose selections (drag to table)</div>
               <ul className="flex flex-wrap gap-2 text-xs">
                 {currentPageData.loose.map((L, i) => (
                   <li key={i}
                       draggable
-                      onDragStart={(e) => {
+                      onDragStart={(e)=>{
+                        setDraggingLoose(L);
                         e.dataTransfer.setData("loose", JSON.stringify({ type: L.type, rect: L.rect }));
                         e.dataTransfer.effectAllowed = "move";
                       }}
+                      onDragEnd={()=>{ setDraggingLoose(null); setDragHover(null); }}
                       className="px-2 py-1 border rounded cursor-move select-none"
-                      style={{ background: L.type === Tool.COLUMN ? "#dcfce7" : "#ffedd5" }}
+                      style={{ background: L.type === Tool.COLUMN ? "#dcfce7" : "#ffedd5", borderColor: L.type === Tool.COLUMN ? "#22c55e" : "#f59e0b" }}
                   >
                     <span className="font-semibold">{L.type}</span>{": "}{L.text || "—"}
                   </li>
