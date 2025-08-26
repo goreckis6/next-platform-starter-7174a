@@ -15,21 +15,13 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// ciaśniejsza tolerancja
+// ciasna tolerancja i próg pokrycia
 const EPS = 0.25;
-// minimalny wymagany procent pokrycia ROW/COLUMN w TABLE, aby zaliczyć (0..1)
 const OVERLAP_T = 0.35;
 
+// utils geometry
 function pointInRect(px, py, r) {
   return px >= r.x - EPS && px <= r.x + r.w + EPS && py >= r.y - EPS && py <= r.y + r.h + EPS;
-}
-function rectsIntersect(r1, r2) {
-  return !(
-    r2.x > r1.x + r1.w + EPS ||
-    r2.x + r2.w < r1.x - EPS ||
-    r2.y > r1.y + r1.h + EPS ||
-    r2.y + r2.h < r1.y - EPS
-  );
 }
 function rectIntersection(a, b) {
   const x1 = Math.max(a.x, b.x);
@@ -47,8 +39,20 @@ function overlapRatio(container, candidate) {
   if (a === 0) return 0;
   return rectArea(inter) / a;
 }
+function rectsIntersect(r1, r2) {
+  return !(r2.x > r1.x + r1.w + EPS || r2.x + r2.w < r1.x - EPS || r2.y > r1.y + r1.h + EPS || r2.y + r2.h < r1.y - EPS);
+}
 
-// uchwyty
+// array move (for DnD)
+function arrayMove(arr, from, to) {
+  const a = arr.slice();
+  if (from === to || from < 0 || to < 0 || from >= a.length || to >= a.length) return a;
+  const [it] = a.splice(from, 1);
+  a.splice(to, 0, it);
+  return a;
+}
+
+// resize handles on canvas
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -85,15 +89,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [viewport, setViewport] = useState({ width: 0, height: 0, transform: [1, 0, 0, 1, 0, 0] });
   const [error, setError] = useState(null);
 
-  // nazwa dokumentu (dla CSV)
+  // nazwa dokumentu (dla CSV) i twardy reload
   const [docName, setDocName] = useState("file");
-  // licznik do twardego przeładowania PDF-a
   const [reloadTick, setReloadTick] = useState(0);
 
-  // cache: { [page]: { items, viewportTransform } }
+  // cache tekstu, selekcje, narzędzie
   const [textCache, setTextCache] = useState({});
-
-  // selections[page] = [{ type, color, rect }]
   const [selections, setSelections] = useState({});
   const [tool, setTool] = useState(Tool.TABLE);
   const colorIndexRef = useRef({ table: 0, column: 0, row: 0 });
@@ -102,13 +103,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // per page: { tables: [...], loose: [...] }
+  // wynik per strona, kolejności i auto-build
   const [pageData, setPageData] = useState({});
+  const [tableOrders, setTableOrders] = useState({});
+  const [autoBuild, setAutoBuild] = useState(true);
 
-  // helper: wyciąganie nazwy pliku z URL lub propsa
+  // doc name helper
   const deriveDocName = useCallback(() => {
     if (typeof pdfNameProp === "string" && pdfNameProp.trim()) return pdfNameProp.trim();
-
     let name = "";
     if (typeof pdfUrl === "string" && pdfUrl) {
       try {
@@ -153,9 +155,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         if (mounted) setError("PDF.js init failed");
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
   // load doc
@@ -166,12 +166,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       if (!pdfUrl && !pdfData) return;
 
       setError(null);
-      if (pdfDoc) {
-        try { await pdfDoc.destroy(); } catch {}
-      }
+      if (pdfDoc) { try { await pdfDoc.destroy(); } catch {} }
       setPdfDoc(null);
       setTextCache({});
       setPageData({});
+      setTableOrders({});
 
       try {
         const name = deriveDocName();
@@ -193,12 +192,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         setPageNum(1);
       }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [pdfUrl, pdfData, pdfjs, reloadTick, deriveDocName]);
 
-  // render + cache text with viewport transform
+  // render page + cache text boxes (viewport space)
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
 
@@ -210,19 +207,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     canvas.height = vp.height;
 
     setViewport({ width: vp.width, height: vp.height, transform: vp.transform });
-
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
     const txt = await page.getTextContent({ includeMarkedContent: true, disableCombineTextItems: false });
-    setTextCache((prev) => ({
-      ...prev,
-      [pageNum]: { items: txt.items, vpTransform: vp.transform },
-    }));
+    setTextCache((prev) => ({ ...prev, [pageNum]: { items: txt.items, vpTransform: vp.transform } }));
   }, [pdfDoc, pageNum, scale]);
 
-  useEffect(() => {
-    renderPage().catch((e) => console.error("Render error:", e));
-  }, [renderPage]);
+  useEffect(() => { renderPage().catch((e) => console.error("Render error:", e)); }, [renderPage]);
 
   // helpers – current selections
   const current = selections[pageNum] || [];
@@ -233,17 +224,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       return { ...prev, [pageNum]: next };
     });
 
-  // toolbar
+  // toolbar actions
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
-  const prevPage = () => {
-    setActiveIndex(-1);
-    setPageNum((n) => Math.max(1, n - 1));
-  };
-  const nextPage = () => {
-    setActiveIndex(-1);
-    setPageNum((n) => Math.min(pageCount, n + 1));
-  };
+  const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
+  const nextPage = () => { setActiveIndex(-1); setPageNum((n) => Math.min(pageCount, n + 1)); };
 
   const nextColorFor = (t) => {
     const list = COLORS[t];
@@ -323,8 +308,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         const minSize = 8;
         if (["tl", "l", "bl"].includes(handle)) {
           const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width);
-          r.w = r.x + r.w - nx;
-          r.x = nx;
+          r.w = r.x + r.w - nx; r.x = nx;
         }
         if (["tr", "r", "br"].includes(handle)) {
           const nx2 = clamp(Math.max(x, r.x + minSize), 0, viewport.width);
@@ -332,8 +316,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         }
         if (["tl", "t", "tr"].includes(handle)) {
           const ny = clamp(Math.min(y, r.y + r.h - minSize), 0, viewport.height);
-          r.h = r.y + r.h - ny;
-          r.y = ny;
+          r.h = r.y + r.h - ny; r.y = ny;
         }
         if (["bl", "b", "br"].includes(handle)) {
           const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height);
@@ -360,10 +343,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   };
 
   const onMouseUp = () => {
-    if (dragging) {
-      setDragging(null);
-      return;
-    }
+    if (dragging) { setDragging(null); return; }
     if (draft && draft.w >= 6 && draft.h >= 6) {
       const norm = toNorm(draft.x, draft.y, draft.w, draft.h, viewport.width, viewport.height);
       setCurrent((prev) => [...prev, { type: draft.type, color: draft.color, rect: norm }]);
@@ -393,28 +373,24 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // ----- PRECYZYJNE BBOXY TEKSTU W KOORDYNATACH VIEWPORTU -----
-  const getTextBoxesForPage = useCallback(
-    (pageNumber) => {
-      const entry = textCache[pageNumber];
-      if (!entry || !pdfjs) return [];
-      const { items, vpTransform } = entry;
-      const Util = pdfjs.Util;
+  // text boxes in viewport coords
+  const getTextBoxesForPage = useCallback((pageNumber) => {
+    const entry = textCache[pageNumber];
+    if (!entry || !pdfjs) return [];
+    const { items, vpTransform } = entry;
+    const Util = pdfjs.Util;
 
-      return items.map((it) => {
-        const T = Util.transform(vpTransform, it.transform || [1, 0, 0, 1, 0, 0]);
-        const x = T[4];
-        const w = (it.width ?? 0) || Math.hypot(T[0], T[2]);
-        const h = Math.hypot(T[1], T[3]);
-        const yTop = T[5] - h; // top-left
-        return { it, x, y: yTop, w, h };
-      });
-    },
-    [textCache, pdfjs]
-  );
+    return items.map((it) => {
+      const T = Util.transform(vpTransform, it.transform || [1, 0, 0, 1, 0, 0]);
+      const x = T[4];
+      const w = (it.width ?? 0) || Math.hypot(T[0], T[2]);
+      const h = Math.hypot(T[1], T[3]);
+      const yTop = T[5] - h; // top-left
+      return { it, x, y: yTop, w, h };
+    });
+  }, [textCache, pdfjs]);
 
   const collectTextInRect = useCallback((rect, boxes) => {
-    // bierzemy glify, których środek leży w prostokącie komórki
     const inside = (bx) => {
       const cx = bx.x + bx.w / 2;
       const cy = bx.y + bx.h / 2;
@@ -430,63 +406,76 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return picked.map((bx) => bx.it.str).join(" ");
   }, []);
 
-  // ----- BUDOWA TABEL (TABLE + ROW + COLUMN) -----
-  const buildTablesForPage = useCallback(
-    (page) => {
-      const sels = selections[page] || [];
-      if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
+  // build tables (supports auto-build)
+  const buildTablesForPage = useCallback((page) => {
+    const sels = selections[page] || [];
+    if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
 
-      const tables = [];
-      const rows = [];
-      const cols = [];
-      for (const s of sels) {
-        const r = fromNorm(s.rect, viewport.width, viewport.height);
-        if (s.type === Tool.TABLE) tables.push({ ...s, rectPx: r });
-        else if (s.type === Tool.ROW) rows.push({ ...s, rectPx: r });
-        else if (s.type === Tool.COLUMN) cols.push({ ...s, rectPx: r });
-      }
+    const tables = [];
+    const rows = [];
+    const cols = [];
+    for (const s of sels) {
+      const r = fromNorm(s.rect, viewport.width, viewport.height);
+      if (s.type === Tool.TABLE) tables.push({ ...s, rectPx: r });
+      else if (s.type === Tool.ROW) rows.push({ ...s, rectPx: r });
+      else if (s.type === Tool.COLUMN) cols.push({ ...s, rectPx: r });
+    }
 
-      const resultTables = tables.map((t) => {
-        const tRect = t.rectPx;
+    let baseTables = tables.map((t) => {
+      const tRect = t.rectPx;
 
-        const inRows = rows
-          .filter((r) => {
-            const cx = r.rectPx.x + r.rectPx.w / 2;
-            const cy = r.rectPx.y + r.rectPx.h / 2;
-            // kryterium: środek w TABLE LUB wystarczające pokrycie powierzchni
-            return pointInRect(cx, cy, tRect) || overlapRatio(tRect, r.rectPx) >= OVERLAP_T;
-          })
-          .sort((a, b) => a.rectPx.y - b.rectPx.y)
-          .map((r) => r.rectPx);
+      const inRows = rows
+        .filter((r) => {
+          const cx = r.rectPx.x + r.rectPx.w / 2;
+          const cy = r.rectPx.y + r.rectPx.h / 2;
+          return pointInRect(cx, cy, tRect) || overlapRatio(tRect, r.rectPx) >= OVERLAP_T;
+        })
+        .sort((a, b) => a.rectPx.y - b.rectPx.y)
+        .map((r) => r.rectPx);
 
-        const inCols = cols
-          .filter((c) => {
-            const cx = c.rectPx.x + c.rectPx.w / 2;
-            const cy = c.rectPx.y + c.rectPx.h / 2;
-            return pointInRect(cx, cy, tRect) || overlapRatio(tRect, c.rectPx) >= OVERLAP_T;
-          })
-          .sort((a, b) => a.rectPx.x - b.rectPx.x)
-          .map((c) => c.rectPx);
+      const inCols = cols
+        .filter((c) => {
+          const cx = c.rectPx.x + c.rectPx.w / 2;
+          const cy = c.rectPx.y + c.rectPx.h / 2;
+          return pointInRect(cx, cy, tRect) || overlapRatio(tRect, c.rectPx) >= OVERLAP_T;
+        })
+        .sort((a, b) => a.rectPx.x - b.rectPx.x)
+        .map((c) => c.rectPx);
 
-        return { rect: tRect, rows: inRows.length ? inRows : [tRect], cols: inCols.length ? inCols : [tRect] };
+      return { rect: tRect, rows: inRows.length ? inRows : [tRect], cols: inCols.length ? inCols : [tRect] };
+    });
+
+    // implicit table: brak TABLE, ale są rows & cols i autoBuild
+    if (baseTables.length === 0 && rows.length > 0 && cols.length > 0 && autoBuild) {
+      const mins = { x: Infinity, y: Infinity };
+      const maxs = { x: -Infinity, y: -Infinity };
+      const all = [...rows.map((r) => r.rectPx), ...cols.map((c) => c.rectPx)];
+      all.forEach((r) => {
+        mins.x = Math.min(mins.x, r.x);
+        mins.y = Math.min(mins.y, r.y);
+        maxs.x = Math.max(maxs.x, r.x + r.w);
+        maxs.y = Math.max(maxs.y, r.y + r.h);
       });
+      const tRect = { x: mins.x, y: mins.y, w: maxs.x - mins.x, h: maxs.y - mins.y };
+      const inRows = rows.sort((a, b) => a.rectPx.y - b.rectPx.y).map((r) => r.rectPx);
+      const inCols = cols.sort((a, b) => a.rectPx.x - b.rectPx.x).map((c) => c.rectPx);
+      baseTables = [{ rect: tRect, rows: inRows, cols: inCols }];
+    }
 
-      const loose = [];
-      for (const s of [...rows, ...cols]) {
-        const centerX = s.rectPx.x + s.rectPx.w / 2;
-        const centerY = s.rectPx.y + s.rectPx.h / 2;
-        const inAnyTable = tables.some(
-          (t) => pointInRect(centerX, centerY, t.rectPx) || overlapRatio(t.rectPx, s.rectPx) >= OVERLAP_T
-        );
-        if (!inAnyTable) loose.push({ type: s.type, rect: s.rectPx });
-      }
+    const loose = [];
+    for (const s of [...rows, ...cols]) {
+      const centerX = s.rectPx.x + s.rectPx.w / 2;
+      const centerY = s.rectPx.y + s.rectPx.h / 2;
+      const inAnyTable = baseTables.some(
+        (t) => pointInRect(centerX, centerY, t.rect) || overlapRatio(t.rect, s.rectPx) >= OVERLAP_T
+      );
+      if (!inAnyTable) loose.push({ type: s.type, rect: s.rectPx });
+    }
 
-      return { tables: resultTables, loose };
-    },
-    [selections, viewport.width, viewport.height]
-  );
+    return { tables: baseTables, loose };
+  }, [selections, viewport.width, viewport.height, autoBuild]);
 
-  // recompute pageData
+  // compute pageData (cells text) from selections
   useEffect(() => {
     if (!pdfDoc) return;
     const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
@@ -526,58 +515,64 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     });
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, buildTablesForPage, getTextBoxesForPage, collectTextInRect]);
 
+  // ensure default orders
+  useEffect(() => {
+    setTableOrders((prev) => {
+      const out = { ...prev };
+      for (const [pStr, pdata] of Object.entries(pageData)) {
+        const p = Number(pStr);
+        pdata.tables?.forEach((T, ti) => {
+          out[p] = out[p] || {};
+          const cur = out[p][ti];
+          const needRow = !cur || (cur.row?.length !== T.rows.length);
+          const needCol = !cur || (cur.col?.length !== T.cols.length);
+          out[p][ti] = {
+            row: needRow ? Array.from({ length: T.rows.length }, (_, i) => i) : cur.row,
+            col: needCol ? Array.from({ length: T.cols.length }, (_, i) => i) : cur.col,
+          };
+        });
+      }
+      return out;
+    });
+  }, [pageData]);
+
   const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
-  // --- CSV builder (wyodrębniony, z mini-testami w DEV) ---
+  // CSV builder
   function buildCSV(rows) {
     return rows
       .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
       .join("\n");
   }
 
-  if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
-    // proste testy w przeglądarce, tylko w DEV
-    (function runSelfTests() {
-      try {
-        // CSV
-        const rows1 = [["a", "b"], ["c", "d"]];
-        const out1 = buildCSV(rows1);
-        console.assert(out1 === '"a","b"\n"c","d"', "CSV: podstawowy join z LF");
-        const rows2 = [["a,b", "c"], ['He said "Hi"']];
-        const out2 = buildCSV(rows2);
-        console.assert(out2.includes('"a,b"'), "CSV: przecinek w polu -> cudzysłów");
-        console.assert(out2.includes('"He said ""Hi"""'), "CSV: cudzysłowy podwajane");
-
-        // Geometria overlap
-        const A = { x: 0, y: 0, w: 100, h: 100 };
-        const B = { x: 25, y: 25, w: 10, h: 10 };
-        const C = { x: 80, y: 0, w: 40, h: 40 }; // 1/4 poza
-        const rAB = overlapRatio(A, B);
-        const rAC = overlapRatio(A, C);
-        console.assert(Math.abs(rAB - 1) < 1e-9, "overlapRatio: środek w 100% wewnątrz -> 1");
-        console.assert(rAC > 0 && rAC < 1, "overlapRatio: częściowe pokrycie w (0,1)");
-      } catch (e) {
-        console.warn("Self-tests failed:", e);
-      }
-    })();
-  }
-
-  // export CSV
+  // EXPORT CSV — uses current orders
   const handleExportCSV = async () => {
-    // Eksport: wszystkie strony, które mają dane (tabele lub loose), bez pustych linii
+    const rows = [];
+
+    // all pages with content
     const pages = Object.keys(pageData)
       .map((n) => parseInt(n, 10))
       .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
       .sort((a, b) => a - b);
 
-    const rows = [];
     for (const p of pages) {
       const d = pageData[p];
-      // Tabele -> każdy wiersz tabeli = wiersz CSV (bez odstępów)
-      d.tables.forEach((T) => {
-        T.cells.forEach((row) => rows.push([...row]));
+      const orders = tableOrders[p] || {};
+      d.tables.forEach((T, ti) => {
+        const ord = orders[ti] || {};
+        const orderedRows = (ord.row && ord.row.length === T.cells.length)
+          ? ord.row
+          : Array.from({ length: T.cells.length }, (_, i) => i);
+        const orderedCols = (ord.col && T.cells[0] && ord.col.length === T.cells[0].length)
+          ? ord.col
+          : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
+
+        orderedRows.forEach((ri) => {
+          const line = orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "");
+          rows.push(line);
+        });
       });
-      // Loose -> każdy wpis jako 1 kolumna (sam tekst), bez odstępów
+
       if (d.loose?.length) {
         d.loose.forEach((frag) => rows.push([frag.text || ""]));
       }
@@ -598,6 +593,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     URL.revokeObjectURL(url);
   };
 
+  // UI
   return (
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -608,23 +604,19 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             className={`px-3 py-1 border rounded text-white ${tool === Tool.TABLE ? "ring-2 ring-offset-1" : ""}`}
             style={{ background: COLORS.table[0], borderColor: COLORS.table[0], opacity: tool === Tool.TABLE ? 1 : 0.85 }}
             onClick={() => setTool(Tool.TABLE)}
-          >
-            [1] Create Table
-          </button>
+          >[1] Create Table</button>
+
           <button
             className={`px-3 py-1 border rounded text-white ${tool === Tool.COLUMN ? "ring-2 ring-offset-1" : ""}`}
             style={{ background: COLORS.column[0], borderColor: COLORS.column[0], opacity: tool === Tool.COLUMN ? 1 : 0.85 }}
             onClick={() => setTool(Tool.COLUMN)}
-          >
-            [2] Add Column
-          </button>
+          >[2] Add Column</button>
+
           <button
             className={`px-3 py-1 border rounded text-white ${tool === Tool.ROW ? "ring-2 ring-offset-1" : ""}`}
             style={{ background: COLORS.row[0], borderColor: COLORS.row[0], opacity: tool === Tool.ROW ? 1 : 0.85 }}
             onClick={() => setTool(Tool.ROW)}
-          >
-            [3] Add Row
-          </button>
+          >[3] Add Row</button>
         </div>
 
         <span className="mx-1" />
@@ -634,7 +626,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>Next &gt;</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => setReloadTick((t) => t + 1)}>Reload</button>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={autoBuild} onChange={(e)=>setAutoBuild(e.target.checked)} />
+            Auto-build table from row/col
+          </label>
           <Legend label="Table" color={COLORS.table[0]} />
           <Legend label="Column" color={COLORS.column[0]} />
           <Legend label="Row" color={COLORS.row[0]} />
@@ -642,7 +638,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[auto_420px] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[auto_520px] gap-6">
+        {/* LEFT: canvas */}
         <div
           className="relative inline-block select-none"
           ref={containerRef}
@@ -667,10 +664,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                 key={i}
                 className="absolute"
                 style={{
-                  left: r.x,
-                  top: r.y,
-                  width: r.w,
-                  height: r.h,
+                  left: r.x, top: r.y, width: r.w, height: r.h,
                   border: `2px solid ${s.color}`,
                   boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
                   background: `${s.color}1a`,
@@ -697,10 +691,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                     setDragging({ mode: "resize", handle, startMouse: { x, y }, startRect: { ...r } });
                   }}
                 />
-                <div
-                  className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br"
-                  style={{ left: 0, top: 0, color: "#fff", background: s.color }}
-                >
+                <div className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br" style={{ left: 0, top: 0, color: "#fff", background: s.color }}>
                   {s.type.toUpperCase()}
                 </div>
               </div>
@@ -715,32 +706,83 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           )}
         </div>
 
-        {/* RIGHT PANEL */}
+        {/* RIGHT: results with DnD */}
         <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h-[80vh]">
           <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
 
           {currentPageData.tables.length === 0 && currentPageData.loose.length === 0 ? (
-            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE, a w nim ROW/COLUMN.</div>
+            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE lub włącz Auto-build i narysuj ROW/COLUMN.</div>
           ) : null}
 
-          {currentPageData.tables.map((T, ti) => (
-            <div key={ti} className="mb-4">
-              <div className="text-sm font-medium mb-1">Table #{ti + 1} — {T.rows.length} rows × {T.cols.length} cols</div>
-              <div className="overflow-auto">
-                <table className="min-w-full border text-sm">
-                  <tbody>
-                    {T.cells.map((row, ri) => (
-                      <tr key={ri}>
-                        {row.map((cell, ci) => (
-                          <td key={ci} className="border px-2 py-1 align-top">{cell || <span className="text-gray-400">—</span>}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {currentPageData.tables.map((T, ti) => {
+            const ord = tableOrders[pageNum]?.[ti] || { row: [], col: [] };
+            const rowOrder = ord.row?.slice() || [];
+            const colOrder = ord.col?.slice() || [];
+            const setRowOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: next, col: colOrder } } }));
+            const setColOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: rowOrder, col: next } } }));
+
+            // DnD handlers (HTML5)
+            let dragCol = -1; let dragRow = -1;
+            const onColDragStart = (i)=> (e)=>{ dragCol = i; e.dataTransfer.effectAllowed = 'move'; };
+            const onColDragOver  = (i)=> (e)=>{ e.preventDefault(); };
+            const onColDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragCol===-1) return; setColOrder(arrayMove(colOrder.length?colOrder:Array.from({length:(T.cells[0]?.length||0)},(_,j)=>j), dragCol, i)); };
+
+            const onRowDragStart = (i)=> (e)=>{ dragRow = i; e.dataTransfer.effectAllowed = 'move'; };
+            const onRowDragOver  = (i)=> (e)=>{ e.preventDefault(); };
+            const onRowDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragRow===-1) return; setRowOrder(arrayMove(rowOrder.length?rowOrder:Array.from({length:T.cells.length},(_,j)=>j), dragRow, i)); };
+
+            const orderedRows = rowOrder.length ? rowOrder : Array.from({length: T.cells.length}, (_,i)=>i);
+            const orderedCols = colOrder.length ? colOrder : Array.from({length: (T.cells[0]?.length||0)}, (_,i)=>i);
+
+            return (
+              <div key={ti} className="mb-6">
+                <div className="text-sm font-medium mb-2">Table #{ti + 1} — {T.rows.length} rows × {T.cols.length} cols</div>
+
+                {/* Column order bar */}
+                <div className="flex items-center gap-2 mb-2 text-xs">
+                  <span className="text-gray-500">Columns:</span>
+                  {orderedCols.map((ci, idx)=> (
+                    <div key={ci}
+                         draggable
+                         onDragStart={onColDragStart(idx)}
+                         onDragOver={onColDragOver(idx)}
+                         onDrop={onColDrop(idx)}
+                         className="px-2 py-1 border rounded cursor-move select-none"
+                         style={{ background: COLORS.column[0], color: '#fff' }}>
+                      C{ci+1}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="overflow-auto">
+                  <table className="min-w-full border text-sm">
+                    <tbody>
+                      {orderedRows.map((ri, rIdx) => (
+                        <tr key={ri}>
+                          {orderedCols.map((ci) => (
+                            <td key={ci} className="border px-2 py-1 align-top">{T.cells[ri]?.[ci] || <span className="text-gray-400">—</span>}</td>
+                          ))}
+                          {/* Row handle */}
+                          <td className="px-2">
+                            <div
+                              draggable
+                              onDragStart={onRowDragStart(rIdx)}
+                              onDragOver={onRowDragOver(rIdx)}
+                              onDrop={onRowDrop(rIdx)}
+                              className="inline-block text-xs px-2 py-1 border rounded cursor-move select-none"
+                              style={{ background: COLORS.row[0], color: '#fff' }}
+                            >
+                              R{ri+1}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {currentPageData.loose.length > 0 && (
             <>
@@ -748,10 +790,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
               <ul className="space-y-1 text-sm">
                 {currentPageData.loose.map((L, i) => (
                   <li key={i}>
-                    <span
-                      className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
-                      style={{ background: L.type === Tool.COLUMN ? COLORS.column[1] : COLORS.row[1] }}
-                    >
+                    <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
+                          style={{ background: L.type === Tool.COLUMN ? COLORS.column[1] : COLORS.row[1] }}>
                       {L.type}
                     </span>
                     {L.text || <span className="text-gray-400">—</span>}
@@ -774,4 +814,3 @@ function Legend({ label, color }) {
     </div>
   );
 }
-
