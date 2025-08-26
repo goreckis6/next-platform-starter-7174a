@@ -15,8 +15,10 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-const EPS = 0.25;            // ciasna tolerancja
-const OVERLAP_T = 0.35;      // min. pokrycie ROW/COL w TABLE (0..1)
+// ustawienia
+const EPS = 0.25;         // ciasna tolerancja
+const OVERLAP_T = 0.35;   // min. pokrycie ROW/COL w TABLE (0..1)
+const SHOW_HANDLES = false; // ukryj „kropki”
 
 // --- geom utils ---
 function pointInRect(px, py, r) {
@@ -38,9 +40,6 @@ function overlapRatio(container, candidate) {
   if (a === 0) return 0;
   return rectArea(inter) / a;
 }
-function rectsIntersect(r1, r2) {
-  return !(r2.x > r1.x + r1.w + EPS || r2.x + r2.w < r1.x - EPS || r2.y > r1.y + r1.h + EPS || r2.y + r2.h < r1.y - EPS);
-}
 
 // przestawianie elementów (DnD)
 function arrayMove(arr, from, to) {
@@ -51,9 +50,9 @@ function arrayMove(arr, from, to) {
   return a;
 }
 
-// uchwyty rozmiaru (te „kropki”)
+// uchwyty rozmiaru – WYŁĄCZONE (SHOW_HANDLES=false)
 const HandleDots = ({ r, active, onMouseDown }) =>
-  active ? (
+  active && SHOW_HANDLES ? (
     <>
       {[
         ["tl", r.x, r.y, "nwse-resize"],
@@ -102,10 +101,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // wyniki + sortowanie + autoBuild
+  // wyniki + sortowanie + autoBuild + ręczne przypięcia z „Loose”
   const [pageData, setPageData] = useState({});
   const [tableOrders, setTableOrders] = useState({}); // { [page]: { [ti]: {row:[...], col:[...] } } }
   const [autoBuild, setAutoBuild] = useState(true);
+  const [manualLinks, setManualLinks] = useState({}); // { [page]: { [ti]: { addRows:[rect], addCols:[rect] } } }
 
   // nazwa pliku z url/props
   const deriveDocName = useCallback(() => {
@@ -156,6 +156,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       setTextCache({});
       setPageData({});
       setTableOrders({});
+      setManualLinks({});
 
       try {
         const name = deriveDocName(); setDocName(name);
@@ -220,7 +221,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return null;
   };
 
-  // mouse
+  // mouse draw/move/resize (uchwyty są ukryte, ale logika działa gdybyś chciał)
   const onMouseDown = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -230,13 +231,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     const hitIdx = hitTestBox(sx, sy);
     if (hitIdx >= 0) {
       setActiveIndex(hitIdx);
-      const h = hitTestHandle(sx, sy, hitIdx);
+      const h = SHOW_HANDLES ? hitTestHandle(sx, sy, hitIdx) : null;
       const r = pxFromNorm(current[hitIdx].rect);
       if (h) setDragging({ mode: "resize", handle: h, startMouse: { x: sx, y: sy }, startRect: r });
       else setDragging({ mode: "move", handle: null, startMouse: { x: sx, y: sy }, startRect: r });
       return;
     }
-
     setActiveIndex(-1);
     setDraft({ x: sx, y: sy, w: 0, h: 0, type: tool, color: nextColorFor(tool) });
   };
@@ -322,7 +322,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return picked.map((bx) => bx.it.str).join(" ");
   }, []);
 
-  // zbuduj tabele (obsługuje autoBuild)
+  // zbuduj tabele (obsługuje autoBuild + manualLinks)
   const buildTablesForPage = useCallback((page) => {
     const sels = selections[page] || [];
     if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
@@ -365,15 +365,33 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       baseTables = [{ rect: tRect, rows: inRows, cols: inCols }];
     }
 
+    // włącz manualnie dopięte z „Loose”
+    const manual = manualLinks[page] || {};
+    baseTables = baseTables.map((Tb, ti) => {
+      const add = manual[ti] || { addRows: [], addCols: [] };
+      const rowsMerged = [...Tb.rows, ...add.addRows].sort((a,b)=>a.y - b.y);
+      const colsMerged = [...Tb.cols, ...add.addCols].sort((a,b)=>a.x - b.x);
+      return { ...Tb, rows: rowsMerged, cols: colsMerged };
+    });
+
+    // policz Loose: tylko te, które NIE trafiły do żadnej tabeli (auto ani manualnie)
+    const allAssignedRects = new Set();
+    baseTables.forEach((T) => {
+      T.rows.forEach((r) => allAssignedRects.add(JSON.stringify(r)));
+      T.cols.forEach((c) => allAssignedRects.add(JSON.stringify(c)));
+    });
+
     const loose = [];
     for (const s of [...rows, ...cols]) {
+      const key = JSON.stringify(s.rectPx);
+      if (allAssignedRects.has(key)) continue; // już wykorzystane
       const cx = s.rectPx.x + s.rectPx.w / 2, cy = s.rectPx.y + s.rectPx.h / 2;
       const inAny = baseTables.some(t => pointInRect(cx, cy, t.rect) || overlapRatio(t.rect, s.rectPx) >= OVERLAP_T);
       if (!inAny) loose.push({ type: s.type, rect: s.rectPx });
     }
 
     return { tables: baseTables, loose };
-  }, [selections, viewport.width, viewport.height, autoBuild]);
+  }, [selections, viewport.width, viewport.height, autoBuild, manualLinks]);
 
   // tekst w komórkach
   useEffect(() => {
@@ -494,10 +512,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         </div>
 
         <span className="mx-1" />
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomIn}>[+] Zoom</button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={zoomOut}>[-] Zoom</button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={prevPage}>&lt; Prev</button>
-        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={nextPage}>Next &gt;</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => setScale((s)=>Math.min(4, Math.round((s + 0.1) * 100)/100))}>[+] Zoom</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => setScale((s)=>Math.max(0.2, Math.round((s - 0.1) * 100)/100))}>[-] Zoom</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => { setActiveIndex(-1); setPageNum((n)=>Math.max(1, n-1)); }}>&lt; Prev</button>
+        <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => { setActiveIndex(-1); setPageNum((n)=>Math.min(pageCount, n+1)); }}>Next &gt;</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => setReloadTick((t) => t + 1)}>Reload</button>
 
         <div className="ml-auto flex items-center gap-4">
@@ -523,7 +541,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           onMouseUp={onMouseUp}
         >
           <canvas ref={canvasRef} className="shadow border" />
-
           {error && (
             <div className="absolute left-0 top-0 w-full p-3 bg-red-50 text-red-800 text-sm border border-red-200">
               PDF load error: <span className="font-mono">{String(error)}</span>
@@ -548,23 +565,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                   const x = clamp(e.clientX - rect.left, 0, viewport.width);
                   const y = clamp(e.clientY - rect.top, 0, viewport.height);
                   setActiveIndex(i);
-                  const h = hitTestHandle(x, y, i);
+                  const h = SHOW_HANDLES ? hitTestHandle(x, y, i) : null;
                   const rpx = { ...r };
                   if (h) setDragging({ mode: "resize", handle: h, startMouse: { x, y }, startRect: rpx });
                   else setDragging({ mode: "move", handle: null, startMouse: { x, y }, startRect: rpx });
                 }}
               >
-                <HandleDots
-                  r={r}
-                  active={active}
-                  onMouseDown={(e, handle) => {
-                    e.stopPropagation();
-                    const rect = containerRef.current.getBoundingClientRect();
-                    const x = clamp(e.clientX - rect.left, 0, viewport.width);
-                    const y = clamp(e.clientY - rect.top, 0, viewport.height);
-                    setDragging({ mode: "resize", handle, startMouse: { x, y }, startRect: { ...r } });
-                  }}
-                />
+                <HandleDots r={r} active={active} onMouseDown={() => {}} />
                 <div className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br" style={{ left: 0, top: 0, color: "#fff", background: s.color }}>
                   {s.type.toUpperCase()}
                 </div>
@@ -580,7 +587,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           )}
         </div>
 
-        {/* RIGHT: results + DnD */}
+        {/* RIGHT: results + DnD + Loose -> Table */}
         <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h-[80vh]">
           <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
 
@@ -598,24 +605,76 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             // DnD (HTML5)
             let dragCol = -1; let dragRow = -1;
             const onColDragStart = (i)=> (e)=>{ dragCol = i; e.dataTransfer.effectAllowed = 'move'; };
-            const onColDragOver  = (i)=> (e)=>{ e.preventDefault(); };
-            const onColDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragCol===-1) return; const base = colOrder.length?colOrder:Array.from({length:(T.cells[0]?.length||0)},(_,j)=>j); setColOrder(arrayMove(base, dragCol, i)); };
+            const onColDragOver  = ()=> (e)=>{ e.preventDefault(); };
+            const onColDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragCol===-1) return;
+              const base = colOrder.length?colOrder:Array.from({length:(T.cells[0]?.length||0)},(_,j)=>j);
+              setColOrder(arrayMove(base, dragCol, i)); };
 
             const onRowDragStart = (i)=> (e)=>{ dragRow = i; e.dataTransfer.effectAllowed = 'move'; };
-            const onRowDragOver  = (i)=> (e)=>{ e.preventDefault(); };
-            const onRowDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragRow===-1) return; const base = rowOrder.length?rowOrder:Array.from({length:T.cells.length},(_,j)=>j); setRowOrder(arrayMove(base, dragRow, i)); };
+            const onRowDragOver  = ()=> (e)=>{ e.preventDefault(); };
+            const onRowDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragRow===-1) return;
+              const base = rowOrder.length?rowOrder:Array.from({length:T.cells.length},(_,j)=>j);
+              setRowOrder(arrayMove(base, dragRow, i)); };
 
             const orderedRows = rowOrder.length ? rowOrder : Array.from({length: T.cells.length}, (_,i)=>i);
             const orderedCols = colOrder.length ? colOrder : Array.from({length: (T.cells[0]?.length||0)}, (_,i)=>i);
+
+            // Drop z LOose: dodanie jako row/col do tej tabeli
+            const attachLoose = (type, rect) => {
+              setManualLinks((prev) => {
+                const next = { ...prev };
+                next[pageNum] = next[pageNum] || {};
+                const cur = next[pageNum][ti] || { addRows: [], addCols: [] };
+                if (type === "row") cur.addRows = [...cur.addRows, rect];
+                else cur.addCols = [...cur.addCols, rect];
+                next[pageNum][ti] = cur;
+                return next;
+              });
+            };
+
+            const onDropRowZone = (e) => {
+              e.preventDefault();
+              const payload = e.dataTransfer.getData("loose");
+              if (!payload) return;
+              const data = JSON.parse(payload);
+              if (data.type !== "row") return;
+              attachLoose("row", data.rect);
+            };
+            const onDropColZone = (e) => {
+              e.preventDefault();
+              const payload = e.dataTransfer.getData("loose");
+              if (!payload) return;
+              const data = JSON.parse(payload);
+              if (data.type !== "column") return;
+              attachLoose("column", data.rect);
+            };
 
             return (
               <div key={ti} className="mb-6">
                 <div className="text-sm font-medium mb-2">Table #{ti + 1} — {T.rows.length} rows × {T.cols.length} cols</div>
 
+                {/* Drop-zones do dopinania z Loose */}
+                <div className="flex flex-wrap gap-3 mb-2 text-xs">
+                  <div
+                    onDragOver={(e)=>e.preventDefault()}
+                    onDrop={onDropRowZone}
+                    className="px-2 py-1 border rounded bg-orange-50"
+                  >
+                    Drop <b>row</b> here
+                  </div>
+                  <div
+                    onDragOver={(e)=>e.preventDefault()}
+                    onDrop={onDropColZone}
+                    className="px-2 py-1 border rounded bg-green-50"
+                  >
+                    Drop <b>column</b> here
+                  </div>
+                </div>
+
                 {/* Pasek kolumn do DnD */}
                 <div className="flex items-center gap-2 mb-2 text-xs">
                   <span className="text-gray-500">Columns:</span>
-                  {orderedCols.map((ci, idx)=> (
+                  {(colOrder.length ? colOrder : Array.from({length:(T.cells[0]?.length||0)}, (_,i)=>i)).map((ci, idx)=> (
                     <div key={ci}
                          draggable
                          onDragStart={onColDragStart(idx)}
@@ -631,10 +690,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                 <div className="overflow-auto">
                   <table className="min-w-full border text-sm">
                     <tbody>
-                      {orderedRows.map((ri, rIdx) => (
+                      {(orderedRows).map((ri, rIdx) => (
                         <tr key={ri}>
                           {orderedCols.map((ci) => (
-                            <td key={ci} className="border px-2 py-1 align-top">{T.cells[ri]?.[ci] || <span className="text-gray-400">—</span>}</td>
+                            <td key={ci} className="border px-2 py-1 align-top">
+                              {T.cells[ri]?.[ci] || <span className="text-gray-400">—</span>}
+                            </td>
                           ))}
                           {/* uchwyt wiersza do DnD */}
                           <td className="px-2">
@@ -658,17 +719,22 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             );
           })}
 
+          {/* LOOSE -> draggable źródła */}
           {currentPageData.loose.length > 0 && (
             <>
               <div className="text-sm font-medium mt-4 mb-1">Loose selections</div>
-              <ul className="space-y-1 text-sm">
+              <ul className="flex flex-wrap gap-2 text-xs">
                 {currentPageData.loose.map((L, i) => (
-                  <li key={i}>
-                    <span className="inline-block min-w-16 px-1 py-0.5 rounded mr-2 text-white"
-                          style={{ background: L.type === Tool.COLUMN ? COLORS.column[1] : COLORS.row[1] }}>
-                      {L.type}
-                    </span>
-                    {L.text || <span className="text-gray-400">—</span>}
+                  <li key={i}
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.setData("loose", JSON.stringify({ type: L.type, rect: L.rect }));
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      className="px-2 py-1 border rounded cursor-move select-none"
+                      style={{ background: L.type === Tool.COLUMN ? "#dcfce7" : "#ffedd5" }}
+                  >
+                    <span className="font-semibold">{L.type}</span>{": "}{L.text || "—"}
                   </li>
                 ))}
               </ul>
