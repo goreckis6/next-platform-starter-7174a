@@ -1,41 +1,62 @@
-# Next.js on Netlify Platform Starter
+# Bank Statement Converter - Improvements
 
-[Live Demo](https://nextjs-platform-starter.netlify.app/)
+This document describes the improvements made to the bank statement converter application to fix caching issues, improve PDF processing for bank statements, and implement a full window PDF display feature.
 
-A modern starter based on Next.js 14 (App Router), Tailwind, and [Netlify Core Primitives](https://docs.netlify.com/core/overview/#develop) (Edge Functions, Image CDN, Blob Store).
+## 1. Caching Issues Fixed
 
-In this site, Netlify Core Primitives are used both implictly for running Next.js features (e.g. Route Handlers, image optimization via `next/image`, and more) and also explicitly by the user code.
+### Problem
+The application was experiencing caching issues where old PDF files were being displayed instead of newly uploaded ones. This was caused by the view API route setting a long-term cache control header that cached PDFs for a year.
 
-Implicit usage means you're using any Next.js functionality and everything "just works" when deployed - all the plumbing is done for you. Explicit usage is framework-agnostic and typically provides more features than what Next.js exposes.
-
-## Deploying to Netlify
-
-This site requires [Netlify Next Runtime v5](https://docs.netlify.com/frameworks/next-js/overview/) for full functionality. That version is now being gradually rolled out to all Netlify accounts.
-
-After deploying via the button below, please visit the **Site Overview** page for your new site to check whether it is already using the v5 runtime. If not, you'll be prompted to opt-in to to v5.
-
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/netlify-templates/next-platform-starter)
-
-## Developing Locally
-
-1. Clone this repository, then run `npm install` in its root directory.
-
-2. For the starter to have full functionality locally (e.g. edge functions, blob store), please ensure you have an up-to-date version of Netlify CLI. Run:
-
+### Solution
+Modified the view API route (`app/api/view/route.js`) to prevent long-term caching by changing the Cache-Control header from:
 ```
-npm install netlify-cli@latest -g
+"Cache-Control": "public, max-age=31536000, immutable"
+```
+to:
+```
+"Cache-Control": "no-cache, no-store, must-revalidate",
+"Pragma": "no-cache",
+"Expires": "0"
 ```
 
-3. Link your local repository to the deployed Netlify site. This will ensure you're using the same runtime version for both local development and your deployed site.
+## 2. PDF Processing Improvements for Bank Statements
 
-```
-netlify link
-```
+### Problem
+The PDF processing logic was not optimally handling bank statements, resulting in poor conversion to columns and rows.
 
-4. Then, run the Next.js development server via Netlify CLI:
+### Solution
+Made several improvements to the `components/InspectClient.jsx` file:
 
-```
-netlify dev
-```
+1. Increased `longLineChars` and `longLineTokens` values to better handle longer lines in bank statements
+2. Made the row clustering algorithm more lenient for bank statements by increasing the threshold
+3. Reduced the penalty for uneven column distribution to better handle bank statements with varying column widths
+4. Reduced the minimum column width to better accommodate narrow columns in bank statements
 
-If your browser doesn't navigate to the site automatically, visit [localhost:8888](http://localhost:8888).
+These changes improve the smart detection algorithm's ability to properly identify and extract table data from bank statements.
+
+## 3. Full Window PDF Display Feature
+
+### Problem
+The application lacked a full window PDF display feature similar to bankstatementconverter.com.
+
+### Solution
+Implemented a full window PDF display feature by:
+
+1. Creating a new `app/fullview` directory with a `page.jsx` component
+2. Adding a `fullWindow` prop to the `InspectClient` component to enable full window display mode
+3. Modifying the `InspectClient` component to render in full window mode when the `fullWindow` prop is true
+
+The full window display provides an immersive experience for viewing and interacting with PDF documents, similar to the bankstatementconverter.com website.
+
+## Testing
+
+To test these improvements:
+
+1. Upload a bank statement PDF file
+2. Verify that the new file is displayed immediately without caching issues
+3. Check that the bank statement is properly converted to columns and rows
+4. Navigate to `/fullview?uuid=[UUID]` to view the PDF in full window mode
+
+## Conclusion
+
+These improvements address the caching issues, enhance the PDF processing for bank statements, and provide a full window display feature that enhances the user experience when working with bank statement PDFs.

@@ -72,7 +72,7 @@ const HandleDots = ({ r, active, onMouseDown }) =>
     </>
   ) : null;
 
-export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameProp }) {
+export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameProp, fullWindow = false }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -407,8 +407,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
     const avgH = words.reduce((s, w) => s + w.h, 0) / words.length;
     const rowTh = Math.max(6, avgH * 0.7);
-    const longLineChars = 60;
-    const longLineTokens = 12;
+    const longLineChars = 100; // Increased for bank statements
+    const longLineTokens = 20; // Increased for bank statements
 
     const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "" }));
     yItems.sort((a, b) => a.y - b.y);
@@ -418,7 +418,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       if (!last) rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
       else {
         const meanY = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
-        if (Math.abs(it.y - meanY) <= rowTh) {
+        // More lenient row clustering for bank statements
+        if (Math.abs(it.y - meanY) <= rowTh * 1.5) {
           last.yMin = Math.min(last.yMin, it.y0);
           last.yMax = Math.max(last.yMax, it.y1);
           last.ys.push(it.y);
@@ -450,7 +451,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       const buckets = Array.from({ length: k }, () => []);
       xm.forEach((v, i) => buckets[labels[i]].push(v));
       const intra = buckets.reduce((s, arr) => s + stddev(arr), 0) / k;
-      const tinyPenalty = buckets.filter(arr => arr.length < 3).length * 5;
+      // Reduced penalty for bank statements which may have uneven column distribution
+      const tinyPenalty = buckets.filter(arr => arr.length < 2).length * 2;
       const score = inter - intra - tinyPenalty;
       if (score > best.score) best = { k, score, labels, centroids };
     }
@@ -476,7 +478,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       cols.push({
         x: Math.max(tableRect.x, x0),
         y: tableRect.y,
-        w: Math.max(8, Math.min(tableRect.x + tableRect.w, x1) - Math.max(tableRect.x, x0)),
+        w: Math.max(5, Math.min(tableRect.x + tableRect.w, x1) - Math.max(tableRect.x, x0)), // Reduced min width for bank statements
         h: tableRect.h,
       });
     }
@@ -989,6 +991,66 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   };
 
   // ---- UI
+  if (fullWindow) {
+    return (
+      <div className="w-full h-screen overflow-hidden">
+        <div className="w-full h-full relative inline-block select-none"
+          ref={containerRef}
+          style={{ lineHeight: 0 }}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+        >
+          <canvas ref={canvasRef} className="shadow border w-full h-full" />
+          {error && (
+            <div className="absolute left-0 top-0 w-full p-3 bg-red-50 text-red-800 text-sm border border-red-200">
+              PDF load error: <span className="font-mono">{String(error)}</span>
+            </div>
+          )}
+
+          {(selections[pageNum] || []).map((s, i) => {
+            const r = fromNorm(s.rect, viewport.width, viewport.height);
+            const active = i === activeIndex;
+            return (
+              <div
+                key={i}
+                className="absolute"
+                style={{
+                  left: r.x, top: r.y, width: r.w, height: r.h,
+                  border: `2px solid ${s.color}`,
+                  boxShadow: active ? `0 0 0 2px ${s.color}40` : "none",
+                  background: `${s.color}1a`,
+                }}
+                onMouseDown={(e) => {
+                  const rect = containerRef.current.getBoundingClientRect();
+                  const x = clamp(e.clientX - rect.left, 0, viewport.width);
+                  const y = clamp(e.clientY - rect.top, 0, viewport.height);
+                  setActiveIndex(i);
+                  const h = SHOW_HANDLES ? hitTestHandle(x, y, i) : null;
+                  const rpx = { ...r };
+                  if (h) setDragging({ mode: "resize", handle: h, startMouse: { x, y }, startRect: rpx });
+                  else setDragging({ mode: "move", handle: null, startMouse: { x, y }, startRect: rpx });
+                }}
+              >
+                <HandleDots r={r} active={active} onMouseDown={() => {}} />
+                <div className="absolute text-[11px] font-semibold px-1.5 py-0.5 rounded-br" style={{ left: 0, top: 0, color: "#fff", background: s.color }}>
+                  {s.type.toUpperCase()}
+                </div>
+              </div>
+            );
+          })}
+
+          {draft && (
+            <div
+              className="absolute border-2 border-dashed"
+              style={{ left: draft.x, top: draft.y, width: draft.w, height: draft.h, borderColor: draft.color, background: `${draft.color}14` }}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center gap-2">

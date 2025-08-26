@@ -16,7 +16,9 @@ export async function GET(request) {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
       },
     });
   } catch (e) {
