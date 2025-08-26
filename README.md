@@ -48,6 +48,21 @@ Implemented a full window PDF display feature by:
 
 The full window display provides an immersive experience for viewing and interacting with PDF documents, similar to the bankstatementconverter.com website.
 
+## 4. AI-Based Transaction Parsing
+
+### Problem
+The transaction data extraction was not as clean as desired, with issues in properly organizing transaction data into a 3-column format (Date, Description, Amount).
+
+### Solution
+Implemented AI-based transaction parsing to improve data extraction and organization:
+
+1. Created a new API route `/api/ai-parse` for AI-based parsing
+2. Added AI parsing option to the export modal in the InspectClient component
+3. Enhanced the transaction parsing logic to use AI when enabled
+4. Improved the 3-column format (Date, Description, Amount) extraction
+
+The AI parsing feature provides better results for complex bank statements by using advanced algorithms to identify and extract transaction data more accurately.
+
 ## Testing
 
 To test these improvements:
@@ -56,7 +71,8 @@ To test these improvements:
 2. Verify that the new file is displayed immediately without caching issues
 3. Check that the bank statement is properly converted to columns and rows
 4. Navigate to `/fullview?uuid=[UUID]` to view the PDF in full window mode
+5. Use the AI parsing option in the export modal for better transaction extraction
 
 ## Conclusion
 
-These improvements address the caching issues, enhance the PDF processing for bank statements, and provide a full window display feature that enhances the user experience when working with bank statement PDFs.
+These improvements address the caching issues, enhance the PDF processing for bank statements, provide a full window display feature, and add AI-based transaction parsing that enhances the user experience when working with bank statement PDFs.
