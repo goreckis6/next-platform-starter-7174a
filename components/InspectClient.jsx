@@ -763,6 +763,50 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     const src = (line || '').replace(/\s{2,}/g, ' ').trim();
     if (!src) return [{}];
 
+    // Special pattern for bank statements with two transactions in one row
+    // Pattern: Date Description Amount Date Description Ref Number Amount
+    const bankStatementPattern = /^(\S+\s+\d{1,2},?\s+\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})\s+(.+?)\s+(-?[\d,.$€£złPLNEURUSD]+)\s+(\S+\s+\d{1,2},?\s+\d{4}|\d{1,2}[./-]\d{1,2}[./-]\d{2,4}|\d{4}-\d{2}-\d{2})\s+(.+?)\s+(\S+)\s+(-?[\d,.$€£złPLNEURUSD]+)$/;
+    const match = src.match(bankStatementPattern);
+    
+    if (match) {
+      // Extract first transaction
+      const firstDate = match[1];
+      const firstDesc = match[2];
+      const firstAmount = match[3];
+      
+      // Extract second transaction
+      const secondDate = match[4];
+      const secondDesc = match[5];
+      const refNumber = match[6];
+      const secondAmount = match[7];
+      
+      // Parse amounts
+      const firstParsedAmount = normalizeNumberToken(firstAmount);
+      const secondParsedAmount = normalizeNumberToken(secondAmount);
+      
+      // Format dates
+      const firstFormattedDate = parseDateHeuristic(firstDate);
+      const secondFormattedDate = parseDateHeuristic(secondDate);
+      
+      return [
+        {
+          "Date": firstFormattedDate,
+          "Description": firstDesc,
+          "Amount": firstParsedAmount,
+          "Debit": firstParsedAmount < 0 ? Math.abs(firstParsedAmount) : null,
+          "Credit": firstParsedAmount > 0 ? firstParsedAmount : null
+        },
+        {
+          "Date": secondFormattedDate,
+          "Description": secondDesc,
+          "Amount": secondParsedAmount,
+          "Debit": secondParsedAmount < 0 ? Math.abs(secondParsedAmount) : null,
+          "Credit": secondParsedAmount > 0 ? secondParsedAmount : null,
+          "Reference Number": refNumber
+        }
+      ];
+    }
+
     // Look for multiple date patterns which might indicate multiple transactions
     const datePatterns = [
       /\b([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})\b/g,
