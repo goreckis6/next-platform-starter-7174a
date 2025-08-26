@@ -61,6 +61,12 @@ Implemented AI-based transaction parsing to improve data extraction and organiza
 3. Enhanced the transaction parsing logic to use AI when enabled
 4. Improved the 3-column format (Date, Description, Amount) extraction
 
+To use the AI parsing feature with ChatGPT:
+
+1. Obtain an OpenAI API key from https://platform.openai.com/
+2. Set the `OPENAI_API_KEY` environment variable with your API key
+3. The AI parsing will automatically use ChatGPT to extract transaction data
+
 The AI parsing feature provides better results for complex bank statements by using advanced algorithms to identify and extract transaction data more accurately.
 
 ## Testing
@@ -76,3 +82,5 @@ To test these improvements:
 ## Conclusion
 
 These improvements address the caching issues, enhance the PDF processing for bank statements, provide a full window display feature, and add AI-based transaction parsing that enhances the user experience when working with bank statement PDFs.
+
+The AI parsing feature can be configured to use ChatGPT for even better transaction extraction by setting the OPENAI_API_KEY environment variable.
