@@ -564,24 +564,25 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   // export CSV
   const handleExportCSV = async () => {
-    // Zbieramy TYLKO komórki tabel (bez metadanych page/table/row, bez loose)
+    // Eksport: wszystkie strony, które mają dane (tabele lub loose), bez pustych linii
     const pages = Object.keys(pageData)
       .map((n) => parseInt(n, 10))
-      .filter((p) => (pageData[p]?.tables?.length || 0) > 0)
+      .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
       .sort((a, b) => a - b);
 
     const rows = [];
     for (const p of pages) {
       const d = pageData[p];
+      // Tabele -> każdy wiersz tabeli = wiersz CSV (bez odstępów)
       d.tables.forEach((T) => {
-        // Każdy wiersz tabeli to wiersz CSV
         T.cells.forEach((row) => rows.push([...row]));
-        // Przerwa między tabelami
-        rows.push([]);
       });
+      // Loose -> każdy wpis jako 1 kolumna (sam tekst), bez odstępów
+      if (d.loose?.length) {
+        d.loose.forEach((frag) => rows.push([frag.text || ""]));
+      }
     }
 
-    // Jeżeli nie było żadnej tabeli, wyeksportuj pusty plik z jedną pustą linią
     if (rows.length === 0) rows.push([]);
 
     const csv = buildCSV(rows);
