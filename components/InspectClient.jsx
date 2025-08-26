@@ -774,3 +774,4 @@ function Legend({ label, color }) {
     </div>
   );
 }
+
