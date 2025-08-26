@@ -534,29 +534,25 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   // export CSV
   const handleExportCSV = async () => {
+    // Zbieramy TYLKO komórki tabel (bez metadanych page/table/row, bez loose)
     const pages = Object.keys(pageData)
       .map((n) => parseInt(n, 10))
-      .filter((p) => {
-        const d = pageData[p];
-        return d && (d.tables?.length || d.loose?.length);
-      })
+      .filter((p) => (pageData[p]?.tables?.length || 0) > 0)
       .sort((a, b) => a - b);
 
     const rows = [];
     for (const p of pages) {
       const d = pageData[p];
       d.tables.forEach((T, ti) => {
-        T.cells.forEach((r, ri) => {
-          rows.push([`page:${p}`, `table:${ti}`, `row:${ri}`, ...r]);
-        });
+        // Każdy wiersz tabeli to wiersz CSV
+        T.cells.forEach((row) => rows.push([...row]));
+        // Przerwa między tabelami
         rows.push([]);
       });
-      d.loose.forEach((L, li) => {
-        rows.push([`page:${p}`, `loose:${li}`, L.type, L.text]);
-      });
-      if ((d.loose?.length || 0) > 0) rows.push([]);
     }
-    if (rows.length === 0) rows.push(["page", "table/loose", "row", "value..."]);
+
+    // Jeżeli nie było żadnej tabeli, wyeksportuj pusty plik z jedną pustą linią
+    if (rows.length === 0) rows.push([]);
 
     const csv = buildCSV(rows);
     const blob = new Blob([csv], { type: "text/csv" });
