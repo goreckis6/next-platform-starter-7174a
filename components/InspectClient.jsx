@@ -106,6 +106,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [tableOrders, setTableOrders] = useState({}); // { [page]: { [ti]: {row:[...], col:[...] } } }
   const [autoBuild, setAutoBuild] = useState(true);
   const [smartDetect, setSmartDetect] = useState(true);
+  const [form2Cols, setForm2Cols] = useState(true); // << NOWE: tryb formularzowy 2 kolumny
   const [manualLinks, setManualLinks] = useState({}); // { [page]: { [ti]: { addRows:[rect], addCols:[rect] } } }
 
   // podglądy DnD
@@ -330,21 +331,98 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return picked.map((bx) => bx.it.str).join(" ");
   }, []);
 
-  // --- SMART DETECT: heurystyczne wyznaczanie wierszy/kolumn z boksów tekstu
+  // --- SMART DETECT (z trybem formularzowym 2 kolumny)
   const inferGrid = useCallback((tableRect, boxes) => {
-    const words = boxes.filter((bx) => {
+    // 1) słowa z obszaru tabeli
+    let words = boxes.filter((bx) => {
       const cx = bx.x + bx.w / 2, cy = bx.y + bx.h / 2;
       return pointInRect(cx, cy, tableRect);
     });
+
+    // 2) filtr szumu (kropki/kreski/spacje)
+    const noiseRe = /^[\s.\-–—·•]+$/u;
+    words = words.filter(w => !noiseRe.test((w.it?.str || "").trim()));
+
     if (words.length < 2) return { rows: [tableRect], cols: [tableRect] };
 
-    // metryki
     const avgH = words.reduce((s, w) => s + w.h, 0) / words.length;
     const avgW = words.reduce((s, w) => s + w.w, 0) / words.length;
     const rowTh = Math.max(6, avgH * 0.7);
-    const colTh = Math.max(6, avgW * 0.7);
 
-    // klastrowanie po Y (wiersze)
+    // --- A) Formularz: spróbuj przeciąć na 2 kolumny największą pionową przerwą
+    if (form2Cols) {
+      const xs = words.map(w => w.x + w.w / 2).sort((a,b)=>a-b);
+      let maxGap = 0, splitX = null;
+      for (let i = 1; i < xs.length; i++) {
+        const gap = xs[i] - xs[i-1];
+        if (gap > maxGap) { maxGap = gap; splitX = (xs[i] + xs[i-1]) / 2; }
+      }
+      if (splitX !== null && maxGap > Math.max(12, avgW * 0.8)) {
+        const leftHas = words.some(w => (w.x + w.w/2) < splitX);
+        const rightHas = words.some(w => (w.x + w.w/2) >= splitX);
+        if (leftHas && rightHas) {
+          const x0 = tableRect.x, x1 = tableRect.x + tableRect.w;
+          const leftCol  = { x: x0, y: tableRect.y, w: splitX - x0, h: tableRect.h };
+          const rightCol = { x: splitX, y: tableRect.y, w: x1 - splitX, h: tableRect.h };
+
+          // klastrowanie Y => wiersze (etykieta + wartość razem)
+          const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h }));
+          yItems.sort((a, b) => a.y - b.y);
+          const rowClusters = [];
+          for (const it of yItems) {
+            const last = rowClusters[rowClusters.length - 1];
+            if (!last) rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y] });
+            else {
+              const mean = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
+              if (Math.abs(it.y - mean) <= rowTh) {
+                last.yMin = Math.min(last.yMin, it.y0);
+                last.yMax = Math.max(last.yMax, it.y1);
+                last.ys.push(it.y);
+              } else {
+                rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y] });
+              }
+            }
+          }
+          const rows = rowClusters.map(c => ({
+            x: tableRect.x,
+            y: Math.max(tableRect.y, c.yMin),
+            w: tableRect.w,
+            h: Math.min(tableRect.y + tableRect.h, c.yMax) - Math.max(tableRect.y, c.yMin),
+          })).filter(r => r.h > 2);
+
+          return { rows: rows.length ? rows : [tableRect], cols: [leftCol, rightCol] };
+        }
+      }
+    }
+
+    // --- B) fallback: klastrowanie po X (po filtracji szumu)
+    const xItems = words.map(w => ({ x: w.x + w.w / 2, x0: w.x, x1: w.x + w.w }));
+    xItems.sort((a, b) => a.x - b.x);
+    const colClusters = [];
+    const colTh = Math.max(10, avgW * 1.1);
+    for (const it of xItems) {
+      const last = colClusters[colClusters.length - 1];
+      if (!last) colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
+      else {
+        const mean = last.xs.reduce((s, v) => s + v, 0) / last.xs.length;
+        if (Math.abs(it.x - mean) <= colTh) {
+          last.xMin = Math.min(last.xMin, it.x0);
+          last.xMax = Math.max(last.xMax, it.x1);
+          last.xs.push(it.x);
+        } else {
+          colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
+        }
+      }
+    }
+    let cols = colClusters.map(c => ({
+      x: Math.max(tableRect.x, c.xMin),
+      y: tableRect.y,
+      w: Math.max(8, Math.min(tableRect.x + tableRect.w, c.xMax) - Math.max(tableRect.x, c.xMin)),
+      h: tableRect.h,
+    })).filter(c => c.w > 6);
+    if (!cols.length) cols = [tableRect];
+
+    // wiersze po Y
     const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h }));
     yItems.sort((a, b) => a.y - b.y);
     const rowClusters = [];
@@ -369,36 +447,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       h: Math.min(tableRect.y + tableRect.h, c.yMax) - Math.max(tableRect.y, c.yMin),
     })).filter(r => r.h > 2);
 
-    // klastrowanie po X (kolumny)
-    const xItems = words.map(w => ({ x: w.x + w.w / 2, x0: w.x, x1: w.x + w.w }));
-    xItems.sort((a, b) => a.x - b.x);
-    const colClusters = [];
-    for (const it of xItems) {
-      const last = colClusters[colClusters.length - 1];
-      if (!last) colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
-      else {
-        const mean = last.xs.reduce((s, v) => s + v, 0) / last.xs.length;
-        if (Math.abs(it.x - mean) <= colTh) {
-          last.xMin = Math.min(last.xMin, it.x0);
-          last.xMax = Math.max(last.xMax, it.x1);
-          last.xs.push(it.x);
-        } else {
-          colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
-        }
-      }
-    }
-    const cols = colClusters.map(c => ({
-      x: Math.max(tableRect.x, c.xMin),
-      y: tableRect.y,
-      w: Math.min(tableRect.x + tableRect.w, c.xMax) - Math.max(tableRect.x, c.xMin),
-      h: tableRect.h,
-    })).filter(c => c.w > 2);
-
-    return {
-      rows: rows.length ? rows : [tableRect],
-      cols: cols.length ? cols : [tableRect],
-    };
-  }, []);
+    return { rows: rows.length ? rows : [tableRect], cols };
+  }, [form2Cols]);
 
   // zbuduj tabele (obsługuje autoBuild + manualLinks + smartDetect)
   const buildTablesForPage = useCallback((page) => {
@@ -680,6 +730,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={smartDetect} onChange={(e)=>setSmartDetect(e.target.checked)} />
             Smart-detect rows/cols
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form2Cols} onChange={(e)=>setForm2Cols(e.target.checked)} />
+            Form layout (2 cols)
           </label>
 
           <Legend label="Table" color={COLORS.table[0]} />
