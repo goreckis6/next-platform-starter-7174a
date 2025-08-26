@@ -15,11 +15,10 @@ const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
 const toNorm = (x, y, w, h, vw, vh) => ({ x: x / vw, y: y / vh, w: w / vw, h: h / vh });
 const fromNorm = (nr, vw, vh) => ({ x: nr.x * vw, y: nr.y * vh, w: nr.w * vw, h: nr.h * vh });
 
-// ciasna tolerancja i próg pokrycia
-const EPS = 0.25;
-const OVERLAP_T = 0.35;
+const EPS = 0.25;            // ciasna tolerancja
+const OVERLAP_T = 0.35;      // min. pokrycie ROW/COL w TABLE (0..1)
 
-// utils geometry
+// --- geom utils ---
 function pointInRect(px, py, r) {
   return px >= r.x - EPS && px <= r.x + r.w + EPS && py >= r.y - EPS && py <= r.y + r.h + EPS;
 }
@@ -43,7 +42,7 @@ function rectsIntersect(r1, r2) {
   return !(r2.x > r1.x + r1.w + EPS || r2.x + r2.w < r1.x - EPS || r2.y > r1.y + r1.h + EPS || r2.y + r2.h < r1.y - EPS);
 }
 
-// array move (for DnD)
+// przestawianie elementów (DnD)
 function arrayMove(arr, from, to) {
   const a = arr.slice();
   if (from === to || from < 0 || to < 0 || from >= a.length || to >= a.length) return a;
@@ -52,7 +51,7 @@ function arrayMove(arr, from, to) {
   return a;
 }
 
-// resize handles on canvas
+// uchwyty rozmiaru (te „kropki”)
 const HandleDots = ({ r, active, onMouseDown }) =>
   active ? (
     <>
@@ -89,11 +88,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [viewport, setViewport] = useState({ width: 0, height: 0, transform: [1, 0, 0, 1, 0, 0] });
   const [error, setError] = useState(null);
 
-  // nazwa dokumentu (dla CSV) i twardy reload
+  // nazwa dokumentu (CSV) + twardy reload
   const [docName, setDocName] = useState("file");
   const [reloadTick, setReloadTick] = useState(0);
 
-  // cache tekstu, selekcje, narzędzie
+  // tekst, selekcje, narzędzie
   const [textCache, setTextCache] = useState({});
   const [selections, setSelections] = useState({});
   const [tool, setTool] = useState(Tool.TABLE);
@@ -103,12 +102,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [activeIndex, setActiveIndex] = useState(-1);
   const [dragging, setDragging] = useState(null);
 
-  // wynik per strona, kolejności i auto-build
+  // wyniki + sortowanie + autoBuild
   const [pageData, setPageData] = useState({});
-  const [tableOrders, setTableOrders] = useState({});
+  const [tableOrders, setTableOrders] = useState({}); // { [page]: { [ti]: {row:[...], col:[...] } } }
   const [autoBuild, setAutoBuild] = useState(true);
 
-  // doc name helper
+  // nazwa pliku z url/props
   const deriveDocName = useCallback(() => {
     if (typeof pdfNameProp === "string" && pdfNameProp.trim()) return pdfNameProp.trim();
     let name = "";
@@ -134,26 +133,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       try {
         const lib = await import("pdfjs-dist");
         let workerUrl;
-        try {
-          const w = await import("pdfjs-dist/build/pdf.worker.mjs?url");
-          workerUrl = w?.default;
-        } catch {
-          try {
-            const w = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
-            workerUrl = w?.default;
-          } catch {
-            try {
-              const w = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url");
-              workerUrl = w?.default;
-            } catch {}
-          }
-        }
+        try { const w = await import("pdfjs-dist/build/pdf.worker.mjs?url"); workerUrl = w?.default; }
+        catch { try { const w = await import("pdfjs-dist/build/pdf.worker.min.mjs?url"); workerUrl = w?.default; }
+        catch { try { const w = await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url"); workerUrl = w?.default; } catch {} } }
         if (workerUrl) lib.GlobalWorkerOptions.workerSrc = workerUrl;
         if (mounted) setPdfjs(lib);
-      } catch (e) {
-        console.error(e);
-        if (mounted) setError("PDF.js init failed");
-      }
+      } catch (e) { console.error(e); if (mounted) setError("PDF.js init failed"); }
     })();
     return () => { mounted = false; };
   }, []);
@@ -173,46 +158,34 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       setTableOrders({});
 
       try {
-        const name = deriveDocName();
-        setDocName(name);
-
+        const name = deriveDocName(); setDocName(name);
         const bustUrl = (u) => (typeof u === "string" ? `${u}${u.includes("?") ? "&" : "?"}ts=${Date.now()}-${reloadTick}` : u);
         const params = pdfData ? { data: pdfData } : { url: bustUrl(pdfUrl), httpHeaders: { "Cache-Control": "no-cache" } };
         const doc = await pdfjs.getDocument(params).promise;
         if (!mounted) return;
-        setPdfDoc(doc);
-        setPageCount(doc.numPages);
-        setPageNum(1);
+        setPdfDoc(doc); setPageCount(doc.numPages); setPageNum(1);
       } catch (err) {
-        console.error(err);
-        if (!mounted) return;
-        setError(err?.message || "PDF load error");
-        setPdfDoc(null);
-        setPageCount(1);
-        setPageNum(1);
+        console.error(err); if (!mounted) return;
+        setError(err?.message || "PDF load error"); setPdfDoc(null); setPageCount(1); setPageNum(1);
       }
     })();
     return () => { mounted = false; };
   }, [pdfUrl, pdfData, pdfjs, reloadTick, deriveDocName]);
 
-  // render page + cache text boxes (viewport space)
+  // render page + cache text
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
-
     const page = await pdfDoc.getPage(pageNum);
     const vp = page.getViewport({ scale });
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    canvas.width = vp.width;
-    canvas.height = vp.height;
-
+    canvas.width = vp.width; canvas.height = vp.height;
     setViewport({ width: vp.width, height: vp.height, transform: vp.transform });
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
 
     const txt = await page.getTextContent({ includeMarkedContent: true, disableCombineTextItems: false });
     setTextCache((prev) => ({ ...prev, [pageNum]: { items: txt.items, vpTransform: vp.transform } }));
   }, [pdfDoc, pageNum, scale]);
-
   useEffect(() => { renderPage().catch((e) => console.error("Render error:", e)); }, [renderPage]);
 
   // helpers – current selections
@@ -230,30 +203,16 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
   const nextPage = () => { setActiveIndex(-1); setPageNum((n) => Math.min(pageCount, n + 1)); };
 
-  const nextColorFor = (t) => {
-    const list = COLORS[t];
-    const i = colorIndexRef.current[t] % list.length;
-    colorIndexRef.current[t] = i + 1;
-    return list[i];
-  };
+  const nextColorFor = (t) => { const list = COLORS[t]; const i = colorIndexRef.current[t] % list.length; colorIndexRef.current[t] = i + 1; return list[i]; };
 
   // hit tests
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
-  const hitTestBox = (x, y) => {
-    for (let i = current.length - 1; i >= 0; i--) {
-      const r = pxFromNorm(current[i].rect);
-      if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i;
-    }
-    return -1;
-  };
+  const hitTestBox = (x, y) => { for (let i = current.length - 1; i >= 0; i--) { const r = pxFromNorm(current[i].rect); if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i; } return -1; };
   const hitTestHandle = (x, y, idx) => {
-    const r = pxFromNorm(current[idx].rect);
-    const size = 8;
+    const r = pxFromNorm(current[idx].rect); const size = 8;
     const near = (px, py) => Math.abs(x - px) <= size && Math.abs(y - py) <= size;
-    if (near(r.x, r.y)) return "tl";
-    if (near(r.x + r.w, r.y)) return "tr";
-    if (near(r.x, r.y + r.h)) return "bl";
-    if (near(r.x + r.w, r.y + r.h)) return "br";
+    if (near(r.x, r.y)) return "tl"; if (near(r.x + r.w, r.y)) return "tr";
+    if (near(r.x, r.y + r.h)) return "bl"; if (near(r.x + r.w, r.y + r.h)) return "br";
     if (Math.abs(x - r.x) <= size && y >= r.y && y <= r.y + r.h) return "l";
     if (Math.abs(x - (r.x + r.w)) <= size && y >= r.y && y <= r.y + r.h) return "r";
     if (Math.abs(y - r.y) <= size && x >= r.x && x <= r.x + r.w) return "t";
@@ -281,7 +240,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     setActiveIndex(-1);
     setDraft({ x: sx, y: sy, w: 0, h: 0, type: tool, color: nextColorFor(tool) });
   };
-
   const onMouseMove = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -291,57 +249,28 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     if (dragging) {
       const { mode, startMouse, startRect, handle } = dragging;
       if (mode === "move") {
-        const dx = x - startMouse.x;
-        const dy = y - startMouse.y;
+        const dx = x - startMouse.x; const dy = y - startMouse.y;
         const nx = clamp(startRect.x + dx, 0, viewport.width - startRect.w);
         const ny = clamp(startRect.y + dy, 0, viewport.height - startRect.h);
-        setCurrent((prev) => {
-          const next = [...prev];
-          next[activeIndex] = {
-            ...next[activeIndex],
-            rect: toNorm(nx, ny, startRect.w, startRect.h, viewport.width, viewport.height),
-          };
-          return next;
-        });
+        setCurrent((prev) => { const next = [...prev]; next[activeIndex] = { ...next[activeIndex], rect: toNorm(nx, ny, startRect.w, startRect.h, viewport.width, viewport.height) }; return next; });
       } else if (mode === "resize") {
-        const r = { ...startRect };
-        const minSize = 8;
-        if (["tl", "l", "bl"].includes(handle)) {
-          const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width);
-          r.w = r.x + r.w - nx; r.x = nx;
-        }
-        if (["tr", "r", "br"].includes(handle)) {
-          const nx2 = clamp(Math.max(x, r.x + minSize), 0, viewport.width);
-          r.w = nx2 - r.x;
-        }
-        if (["tl", "t", "tr"].includes(handle)) {
-          const ny = clamp(Math.min(y, r.y + r.h - minSize), 0, viewport.height);
-          r.h = r.y + r.h - ny; r.y = ny;
-        }
-        if (["bl", "b", "br"].includes(handle)) {
-          const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height);
-          r.h = ny2 - r.y;
-        }
-        setCurrent((prev) => {
-          const next = [...prev];
-          next[activeIndex] = { ...next[activeIndex], rect: toNorm(r.x, r.y, r.w, r.h, viewport.width, viewport.height) };
-          return next;
-        });
+        const r = { ...startRect }; const minSize = 8;
+        if (["tl","l","bl"].includes(handle)) { const nx = clamp(Math.min(x, r.x + r.w - minSize), 0, viewport.width); r.w = r.x + r.w - nx; r.x = nx; }
+        if (["tr","r","br"].includes(handle)) { const nx2 = clamp(Math.max(x, r.x + minSize), 0, viewport.width); r.w = nx2 - r.x; }
+        if (["tl","t","tr"].includes(handle)) { const ny = clamp(Math.min(y, r.y + r.h - minSize), 0, viewport.height); r.h = r.y + r.h - ny; r.y = ny; }
+        if (["bl","b","br"].includes(handle)) { const ny2 = clamp(Math.max(y, r.y + minSize), 0, viewport.height); r.h = ny2 - r.y; }
+        setCurrent((prev) => { const next = [...prev]; next[activeIndex] = { ...next[activeIndex], rect: toNorm(r.x, r.y, r.w, r.h, viewport.width, viewport.height) }; return next; });
       }
       return;
     }
 
     if (draft) {
-      const w = x - draft.x;
-      const h = y - draft.y;
-      const W = Math.abs(w);
-      const H = Math.abs(h);
-      const nx = w < 0 ? draft.x - W : draft.x;
-      const ny = h < 0 ? draft.y - H : draft.y;
+      const w = x - draft.x; const h = y - draft.y;
+      const W = Math.abs(w); const H = Math.abs(h);
+      const nx = w < 0 ? draft.x - W : draft.x; const ny = h < 0 ? draft.y - H : draft.y;
       setDraft({ ...draft, x: nx, y: ny, w: W, h: H });
     }
   };
-
   const onMouseUp = () => {
     if (dragging) { setDragging(null); return; }
     if (draft && draft.w >= 6 && draft.h >= 6) {
@@ -356,10 +285,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (activeIndex >= 0) {
-          setCurrent((prev) => prev.filter((_, i) => i !== activeIndex));
-          setActiveIndex(-1);
-        }
+        if (activeIndex >= 0) { setCurrent((prev) => prev.filter((_, i) => i !== activeIndex)); setActiveIndex(-1); }
       }
       if (e.key === "1") setTool(Tool.TABLE);
       if (e.key === "2") setTool(Tool.COLUMN);
@@ -373,47 +299,35 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
-  // text boxes in viewport coords
+  // text boxes (viewport coords)
   const getTextBoxesForPage = useCallback((pageNumber) => {
     const entry = textCache[pageNumber];
     if (!entry || !pdfjs) return [];
     const { items, vpTransform } = entry;
     const Util = pdfjs.Util;
-
     return items.map((it) => {
       const T = Util.transform(vpTransform, it.transform || [1, 0, 0, 1, 0, 0]);
       const x = T[4];
       const w = (it.width ?? 0) || Math.hypot(T[0], T[2]);
       const h = Math.hypot(T[1], T[3]);
-      const yTop = T[5] - h; // top-left
+      const yTop = T[5] - h;
       return { it, x, y: yTop, w, h };
     });
   }, [textCache, pdfjs]);
 
   const collectTextInRect = useCallback((rect, boxes) => {
-    const inside = (bx) => {
-      const cx = bx.x + bx.w / 2;
-      const cy = bx.y + bx.h / 2;
-      return pointInRect(cx, cy, rect);
-    };
-    const picked = [];
-    for (const bx of boxes) if (inside(bx)) picked.push(bx);
-    picked.sort((a, b) => {
-      const dy = a.y - b.y;
-      if (Math.abs(dy) > 0.75) return dy;
-      return a.x - b.x;
-    });
+    const inside = (bx) => { const cx = bx.x + bx.w / 2; const cy = bx.y + bx.h / 2; return pointInRect(cx, cy, rect); };
+    const picked = []; for (const bx of boxes) if (inside(bx)) picked.push(bx);
+    picked.sort((a, b) => { const dy = a.y - b.y; if (Math.abs(dy) > 0.75) return dy; return a.x - b.x; });
     return picked.map((bx) => bx.it.str).join(" ");
   }, []);
 
-  // build tables (supports auto-build)
+  // zbuduj tabele (obsługuje autoBuild)
   const buildTablesForPage = useCallback((page) => {
     const sels = selections[page] || [];
     if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
 
-    const tables = [];
-    const rows = [];
-    const cols = [];
+    const tables = [], rows = [], cols = [];
     for (const s of sels) {
       const r = fromNorm(s.rect, viewport.width, viewport.height);
       if (s.type === Tool.TABLE) tables.push({ ...s, rectPx: r });
@@ -423,90 +337,69 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
     let baseTables = tables.map((t) => {
       const tRect = t.rectPx;
-
       const inRows = rows
         .filter((r) => {
-          const cx = r.rectPx.x + r.rectPx.w / 2;
-          const cy = r.rectPx.y + r.rectPx.h / 2;
+          const cx = r.rectPx.x + r.rectPx.w / 2; const cy = r.rectPx.y + r.rectPx.h / 2;
           return pointInRect(cx, cy, tRect) || overlapRatio(tRect, r.rectPx) >= OVERLAP_T;
         })
         .sort((a, b) => a.rectPx.y - b.rectPx.y)
         .map((r) => r.rectPx);
-
       const inCols = cols
         .filter((c) => {
-          const cx = c.rectPx.x + c.rectPx.w / 2;
-          const cy = c.rectPx.y + c.rectPx.h / 2;
+          const cx = c.rectPx.x + c.rectPx.w / 2; const cy = c.rectPx.y + c.rectPx.h / 2;
           return pointInRect(cx, cy, tRect) || overlapRatio(tRect, c.rectPx) >= OVERLAP_T;
         })
         .sort((a, b) => a.rectPx.x - b.rectPx.x)
         .map((c) => c.rectPx);
-
       return { rect: tRect, rows: inRows.length ? inRows : [tRect], cols: inCols.length ? inCols : [tRect] };
     });
 
-    // implicit table: brak TABLE, ale są rows & cols i autoBuild
+    // implicit table jeśli brak TABLE, ale są row+col i autoBuild
     if (baseTables.length === 0 && rows.length > 0 && cols.length > 0 && autoBuild) {
-      const mins = { x: Infinity, y: Infinity };
-      const maxs = { x: -Infinity, y: -Infinity };
-      const all = [...rows.map((r) => r.rectPx), ...cols.map((c) => c.rectPx)];
-      all.forEach((r) => {
-        mins.x = Math.min(mins.x, r.x);
-        mins.y = Math.min(mins.y, r.y);
-        maxs.x = Math.max(maxs.x, r.x + r.w);
-        maxs.y = Math.max(maxs.y, r.y + r.h);
-      });
+      const mins = { x: Infinity, y: Infinity }, maxs = { x: -Infinity, y: -Infinity };
+      const all = [...rows.map(r => r.rectPx), ...cols.map(c => c.rectPx)];
+      all.forEach(r => { mins.x = Math.min(mins.x, r.x); mins.y = Math.min(mins.y, r.y); maxs.x = Math.max(maxs.x, r.x + r.w); maxs.y = Math.max(maxs.y, r.y + r.h); });
       const tRect = { x: mins.x, y: mins.y, w: maxs.x - mins.x, h: maxs.y - mins.y };
-      const inRows = rows.sort((a, b) => a.rectPx.y - b.rectPx.y).map((r) => r.rectPx);
-      const inCols = cols.sort((a, b) => a.rectPx.x - b.rectPx.x).map((c) => c.rectPx);
+      const inRows = rows.sort((a,b)=>a.rectPx.y - b.rectPx.y).map(r=>r.rectPx);
+      const inCols = cols.sort((a,b)=>a.rectPx.x - b.rectPx.x).map(c=>c.rectPx);
       baseTables = [{ rect: tRect, rows: inRows, cols: inCols }];
     }
 
     const loose = [];
     for (const s of [...rows, ...cols]) {
-      const centerX = s.rectPx.x + s.rectPx.w / 2;
-      const centerY = s.rectPx.y + s.rectPx.h / 2;
-      const inAnyTable = baseTables.some(
-        (t) => pointInRect(centerX, centerY, t.rect) || overlapRatio(t.rect, s.rectPx) >= OVERLAP_T
-      );
-      if (!inAnyTable) loose.push({ type: s.type, rect: s.rectPx });
+      const cx = s.rectPx.x + s.rectPx.w / 2, cy = s.rectPx.y + s.rectPx.h / 2;
+      const inAny = baseTables.some(t => pointInRect(cx, cy, t.rect) || overlapRatio(t.rect, s.rectPx) >= OVERLAP_T);
+      if (!inAny) loose.push({ type: s.type, rect: s.rectPx });
     }
 
     return { tables: baseTables, loose };
   }, [selections, viewport.width, viewport.height, autoBuild]);
 
-  // compute pageData (cells text) from selections
+  // tekst w komórkach
   useEffect(() => {
     if (!pdfDoc) return;
-    const pagesWithText = Object.keys(textCache).map((k) => parseInt(k, 10));
-    if (pagesWithText.length === 0) return;
+    const pages = Object.keys(textCache).map((k) => +k);
+    if (!pages.length) return;
 
     setPageData((prev) => {
       const next = { ...prev };
-      for (const p of pagesWithText) {
+      for (const p of pages) {
         const structure = buildTablesForPage(p);
         const boxes = getTextBoxesForPage(p);
 
         const tablesOut = structure.tables.map((T) => {
-          const rowsRects = T.rows;
-          const colsRects = T.cols;
-
-          const cells = rowsRects.map((rr) =>
-            colsRects.map((cc) => {
+          const cells = T.rows.map((rr) =>
+            T.cols.map((cc) => {
               const rc = rectIntersection(T.rect, rr);
               const cellRect = rc ? rectIntersection(rc, cc) : null;
-              if (!cellRect) return "";
-              return collectTextInRect(cellRect, boxes);
+              return cellRect ? collectTextInRect(cellRect, boxes) : "";
             })
           );
-
-          return { rect: T.rect, rows: rowsRects, cols: colsRects, cells };
+          return { rect: T.rect, rows: T.rows, cols: T.cols, cells };
         });
 
         const looseOut = structure.loose.map((frag) => ({
-          type: frag.type,
-          rect: frag.rect,
-          text: collectTextInRect(frag.rect, boxes),
+          type: frag.type, rect: frag.rect, text: collectTextInRect(frag.rect, boxes),
         }));
 
         next[p] = { tables: tablesOut, loose: looseOut };
@@ -515,7 +408,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     });
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, buildTablesForPage, getTextBoxesForPage, collectTextInRect]);
 
-  // ensure default orders
+  // domyślne kolejności
   useEffect(() => {
     setTableOrders((prev) => {
       const out = { ...prev };
@@ -540,18 +433,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   // CSV builder
   function buildCSV(rows) {
-    return rows
-      .map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","))
-      .join("\n");
+    return rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   }
 
-  // EXPORT CSV — uses current orders
+  // eksport CSV (z kolejnością DnD)
   const handleExportCSV = async () => {
     const rows = [];
-
-    // all pages with content
-    const pages = Object.keys(pageData)
-      .map((n) => parseInt(n, 10))
+    const pages = Object.keys(pageData).map((n) => +n)
       .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
       .sort((a, b) => a - b);
 
@@ -560,26 +448,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       const orders = tableOrders[p] || {};
       d.tables.forEach((T, ti) => {
         const ord = orders[ti] || {};
-        const orderedRows = (ord.row && ord.row.length === T.cells.length)
-          ? ord.row
-          : Array.from({ length: T.cells.length }, (_, i) => i);
-        const orderedCols = (ord.col && T.cells[0] && ord.col.length === T.cells[0].length)
-          ? ord.col
-          : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
-
-        orderedRows.forEach((ri) => {
-          const line = orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "");
-          rows.push(line);
-        });
+        const orderedRows = (ord.row?.length === T.cells.length) ? ord.row : Array.from({ length: T.cells.length }, (_, i) => i);
+        const orderedCols = (T.cells[0] && ord.col?.length === T.cells[0].length) ? ord.col : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
+        orderedRows.forEach((ri) => rows.push(orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "")));
       });
-
-      if (d.loose?.length) {
-        d.loose.forEach((frag) => rows.push([frag.text || ""]));
-      }
+      if (d.loose?.length) d.loose.forEach((frag) => rows.push([frag.text || ""]));
     }
 
     if (rows.length === 0) rows.push([]);
-
     const csv = buildCSV(rows);
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -593,7 +469,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     URL.revokeObjectURL(url);
   };
 
-  // UI
+  // --- UI ---
   return (
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -605,13 +481,11 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             style={{ background: COLORS.table[0], borderColor: COLORS.table[0], opacity: tool === Tool.TABLE ? 1 : 0.85 }}
             onClick={() => setTool(Tool.TABLE)}
           >[1] Create Table</button>
-
           <button
             className={`px-3 py-1 border rounded text-white ${tool === Tool.COLUMN ? "ring-2 ring-offset-1" : ""}`}
             style={{ background: COLORS.column[0], borderColor: COLORS.column[0], opacity: tool === Tool.COLUMN ? 1 : 0.85 }}
             onClick={() => setTool(Tool.COLUMN)}
           >[2] Add Column</button>
-
           <button
             className={`px-3 py-1 border rounded text-white ${tool === Tool.ROW ? "ring-2 ring-offset-1" : ""}`}
             style={{ background: COLORS.row[0], borderColor: COLORS.row[0], opacity: tool === Tool.ROW ? 1 : 0.85 }}
@@ -706,12 +580,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           )}
         </div>
 
-        {/* RIGHT: results with DnD */}
+        {/* RIGHT: results + DnD */}
         <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h-[80vh]">
           <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
 
           {currentPageData.tables.length === 0 && currentPageData.loose.length === 0 ? (
-            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE lub włącz Auto-build i narysuj ROW/COLUMN.</div>
+            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE, albo włącz Auto-build i dodaj ROW/COLUMN.</div>
           ) : null}
 
           {currentPageData.tables.map((T, ti) => {
@@ -721,15 +595,15 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             const setRowOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: next, col: colOrder } } }));
             const setColOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: rowOrder, col: next } } }));
 
-            // DnD handlers (HTML5)
+            // DnD (HTML5)
             let dragCol = -1; let dragRow = -1;
             const onColDragStart = (i)=> (e)=>{ dragCol = i; e.dataTransfer.effectAllowed = 'move'; };
             const onColDragOver  = (i)=> (e)=>{ e.preventDefault(); };
-            const onColDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragCol===-1) return; setColOrder(arrayMove(colOrder.length?colOrder:Array.from({length:(T.cells[0]?.length||0)},(_,j)=>j), dragCol, i)); };
+            const onColDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragCol===-1) return; const base = colOrder.length?colOrder:Array.from({length:(T.cells[0]?.length||0)},(_,j)=>j); setColOrder(arrayMove(base, dragCol, i)); };
 
             const onRowDragStart = (i)=> (e)=>{ dragRow = i; e.dataTransfer.effectAllowed = 'move'; };
             const onRowDragOver  = (i)=> (e)=>{ e.preventDefault(); };
-            const onRowDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragRow===-1) return; setRowOrder(arrayMove(rowOrder.length?rowOrder:Array.from({length:T.cells.length},(_,j)=>j), dragRow, i)); };
+            const onRowDrop      = (i)=> (e)=>{ e.preventDefault(); if(dragRow===-1) return; const base = rowOrder.length?rowOrder:Array.from({length:T.cells.length},(_,j)=>j); setRowOrder(arrayMove(base, dragRow, i)); };
 
             const orderedRows = rowOrder.length ? rowOrder : Array.from({length: T.cells.length}, (_,i)=>i);
             const orderedCols = colOrder.length ? colOrder : Array.from({length: (T.cells[0]?.length||0)}, (_,i)=>i);
@@ -738,7 +612,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
               <div key={ti} className="mb-6">
                 <div className="text-sm font-medium mb-2">Table #{ti + 1} — {T.rows.length} rows × {T.cols.length} cols</div>
 
-                {/* Column order bar */}
+                {/* Pasek kolumn do DnD */}
                 <div className="flex items-center gap-2 mb-2 text-xs">
                   <span className="text-gray-500">Columns:</span>
                   {orderedCols.map((ci, idx)=> (
@@ -762,7 +636,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                           {orderedCols.map((ci) => (
                             <td key={ci} className="border px-2 py-1 align-top">{T.cells[ri]?.[ci] || <span className="text-gray-400">—</span>}</td>
                           ))}
-                          {/* Row handle */}
+                          {/* uchwyt wiersza do DnD */}
                           <td className="px-2">
                             <div
                               draggable
