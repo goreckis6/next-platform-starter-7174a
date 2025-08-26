@@ -3,9 +3,11 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 
-// AI-only pipeline z chunkowaniem: PDF -> tekst per strona -> porcje (5 stron) ->
-// /.netlify/functions/ai-parse (kilka wywołań) -> merge + dedupe -> CSV/XLSX
-
+/**
+ * Minimalny front z chunkowaniem:
+ * PDF -> tekst per strona (pdfjs) -> /.netlify/functions/ai-parse (po 1 stronie)
+ * -> scalanie + deduplikacja -> podgląd + eksport CSV/XLSX
+ */
 export default function InspectClient({
   pdfUrl,
   pdfData,
@@ -33,7 +35,7 @@ export default function InspectClient({
   const [textCache, setTextCache] = useState({});
   const [isParsing, setIsParsing] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const [transactions, setTransactions] = useState([]); // wynik AI
+  const [transactions, setTransactions] = useState([]);
 
   // Konfig eksportu
   const ALL_COLUMNS = [
@@ -65,6 +67,25 @@ export default function InspectClient({
       return n;
     });
 
+  // ===== helpers
+  const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+  const chunkArray = (arr, size) => {
+    const out = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  };
+  const minifyText = (s) =>
+    String(s || "")
+      .replace(/\s+$/gm, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n");
+  const makeTxKey = (t) => {
+    const date = String(t?.Date ?? "").trim();
+    const amt = String(t?.Amount ?? t?.Debit ?? t?.Credit ?? "").trim();
+    const desc = String(t?.Description ?? "").trim().replace(/\s+/g, " ");
+    return `${date}||${amt}||${desc}`.toLowerCase();
+  };
+
   const deriveDocName = useCallback(() => {
     if (typeof pdfNameProp === "string" && pdfNameProp.trim())
       return pdfNameProp.trim();
@@ -86,7 +107,7 @@ export default function InspectClient({
     return name || "file.pdf";
   }, [pdfNameProp, pdfUrl, pdfData]);
 
-  // init pdfjs
+  // ===== init pdfjs (z workerem)
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -122,7 +143,7 @@ export default function InspectClient({
     };
   }, []);
 
-  // load doc
+  // ===== load doc
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -169,7 +190,7 @@ export default function InspectClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfUrl, pdfData, pdfjs, reloadTick, deriveDocName]);
 
-  // render + text
+  // ===== render + cache tekstu bieżącej strony
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -195,7 +216,7 @@ export default function InspectClient({
     renderPage().catch((e) => console.error("Render error:", e));
   }, [renderPage]);
 
-  // navigation & zoom
+  // ===== nawigacja
   const zoomIn = () =>
     setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () =>
@@ -203,7 +224,7 @@ export default function InspectClient({
   const prevPage = () => setPageNum((n) => Math.max(1, n - 1));
   const nextPage = () => setPageNum((n) => Math.min(pageCount, n + 1));
 
-  // ===== Helpers: tekst per strona i chunkowanie =====
+  // ===== tekst jednej strony (z cache)
   const getPageText = useCallback(
     async (p) => {
       if (!pdfDoc) return "";
@@ -225,45 +246,35 @@ export default function InspectClient({
     [pdfDoc, textCache]
   );
 
-  function chunkArray(arr, size) {
-    const out = [];
-    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-    return out;
-  }
-
-  function makeTxKey(t) {
-    const date = String(t?.Date ?? "").trim();
-    const amt = String(t?.Amount ?? t?.Debit ?? t?.Credit ?? "").trim();
-    const desc = String(t?.Description ?? "").trim().replace(/\s+/g, " ");
-    return `${date}||${amt}||${desc}`.toLowerCase();
-  }
-
-  // ===== Główna procedura: parsowanie w porcjach =====
+  // ===== główne parsowanie w porcjach (CHUNK_PAGES = 1)
   const parseWithAI = useCallback(async () => {
     if (!pdfDoc) return;
     try {
       setIsParsing(true);
-      setProgress({ done: 0, total: 0 });
 
       const pages = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
-      const CHUNK_PAGES = 5; // <= zmień, jeśli trzeba krócej/szybciej
+      const CHUNK_PAGES = 1;       // 1 strona = 1 request (najbezpieczniej na Netlify)
+      const MAX_CHARS = 60_000;    // limit per request (po stronie klienta)
       const chunks = chunkArray(pages, CHUNK_PAGES);
+
       setProgress({ done: 0, total: chunks.length });
 
       const all = new Map();
-      const failed = [];
+      const unrecovered = [];
 
       for (let i = 0; i < chunks.length; i++) {
         const group = chunks[i];
-        // Zbierz tekst tej porcji
+
+        // zbierz i zminimalizuj tekst porcji
         const texts = [];
         for (const p of group) {
-          const t = await getPageText(p);
-          if (t) texts.push(`(Page ${p})\n${t}`);
+          const s = await getPageText(p);
+          if (s) texts.push(`(Page ${p})\n${s}`);
         }
-        const payload = texts.join("\n\n");
+        let payload = minifyText(texts.join("\n\n"));
+        if (payload.length > MAX_CHARS) payload = payload.slice(0, MAX_CHARS);
 
-        // wołaj funkcję Netlify
+        // wywołanie funkcji
         const res = await fetch("/.netlify/functions/ai-parse", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -271,14 +282,12 @@ export default function InspectClient({
         });
 
         if (!res.ok) {
+          // przy CHUNK_PAGES=1 to już pojedyncza strona – po prostu zapisz jako nieudane
           const body = await res.text().catch(() => "(no body)");
-          console.error("Chunk failed:", group, res.status, body);
-          failed.push({ group, status: res.status, body });
+          unrecovered.push({ group, status: res.status, body });
         } else {
           const data = await res.json().catch(() => ({}));
-          const list = Array.isArray(data.transactions)
-            ? data.transactions
-            : [];
+          const list = Array.isArray(data.transactions) ? data.transactions : [];
           for (const t of list) {
             const k = makeTxKey(t);
             if (!all.has(k)) all.set(k, t);
@@ -290,18 +299,17 @@ export default function InspectClient({
 
       setTransactions(Array.from(all.values()));
 
-      if (failed.length) {
-        const msg = failed
+      if (unrecovered.length) {
+        const msg = unrecovered
           .map(
             (f) =>
-              `pages: ${f.group.join(", ")} | status: ${f.status} | body: ${f.body.slice(
-                0,
-                200
-              )}`
+              `pages: ${f.group.join(", ")} | status: ${f.status} | body: ${String(
+                f.body || ""
+              ).slice(0, 200)}`
           )
           .join("\n");
         alert(
-          `Część porcji nie przeszła (niektóre 504). Wyniki częściowe zebrane.\n\nSzczegóły:\n${msg}`
+          `Część porcji nie przeszła (504). Wyniki częściowe zebrane.\n\nSzczegóły:\n${msg}`
         );
       }
     } catch (e) {
@@ -312,7 +320,7 @@ export default function InspectClient({
     }
   }, [pdfDoc, getPageText]);
 
-  // ===== Export =====
+  // ===== Export
   function buildCSV(rows) {
     return rows
       .map((r) =>
@@ -391,7 +399,7 @@ export default function InspectClient({
     }
   }
 
-  // ---- UI
+  // ===== UI
   const CanvasShell = (
     <div
       className="relative inline-block select-none"
@@ -500,14 +508,14 @@ export default function InspectClient({
         {CanvasShell}
 
         {/* RIGHT: wynik AI */}
-        <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h-[80vh]">
+        <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h=[80vh]">
           <div className="font-semibold mb-2">
             Transactions ({transactions.length})
           </div>
 
           {!transactions.length ? (
             <div className="text-sm text-gray-500">
-              Kliknij <b>Parse with AI</b>, aby przetworzyć PDF. Duże pliki są dzielone na porcje, by uniknąć timeoutów (504).
+              Kliknij <b>Parse with AI</b>, aby przetworzyć PDF (po 1 stronie, by uniknąć timeoutów 504).
             </div>
           ) : (
             <>
