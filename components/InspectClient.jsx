@@ -101,14 +101,43 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [autoBuild, setAutoBuild] = useState(true);
   const [smartDetect, setSmartDetect] = useState(true);
 
-  // NEW: dynamic columns
-  const [autoCols, setAutoCols] = useState(true);  // auto-detect 2..6
-  const [maxCols, setMaxCols] = useState(6);
-  const [form2Cols, setForm2Cols] = useState(false); // manual 2 columns (fallback style)
+  // kolumny auto (działają w tle, ale nie pokazujemy w UI)
+  const autoCols = true;
+  const maxCols = 6;
 
   const [manualLinks, setManualLinks] = useState({});
   const [draggingLoose, setDraggingLoose] = useState(null);
   const [dragHover, setDragHover] = useState(null);
+
+  // ===== Export Settings (⚙️) =====
+  const [showExport, setShowExport] = useState(false);
+  const [exportType, setExportType] = useState("xlsx"); // 'xlsx' | 'csv'
+  const TRANSACTION_COLUMNS = [
+    "Date",
+    "Source Date",
+    "Description",
+    "Credit",
+    "Debit",
+    "Amount",
+    "Balance",
+    "Currency",
+    "Reference Number",
+    "Reference 1",
+    "Reference 2",
+    "Transaction Type",
+    "Transaction Category",
+    "Branch",
+    "Sender/Receiver Name",
+    "Source Statement Page",
+  ];
+  const [selectedCols, setSelectedCols] = useState(new Set(TRANSACTION_COLUMNS)); // domyślnie wszystkie
+  const toggleCol = (label) =>
+    setSelectedCols((prev) => {
+      const n = new Set(prev);
+      if (n.has(label)) n.delete(label);
+      else n.add(label);
+      return n;
+    });
 
   const deriveDocName = useCallback(() => {
     if (typeof pdfNameProp === "string" && pdfNameProp.trim()) return pdfNameProp.trim();
@@ -350,12 +379,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       for (let i = 0; i < xs.length; i++) { sums[labels[i]] += xs[i]; counts[labels[i]]++; }
       const newC = centroids.slice();
       for (let c = 0; c < k; c++) {
-        if (counts[c] === 0) {
-          // empty cluster: nudge between neighbors
-          newC[c] = min + Math.random() * (max - min);
-        } else {
-          newC[c] = sums[c] / counts[c];
-        }
+        if (counts[c] === 0) newC[c] = min + Math.random() * (max - min);
+        else newC[c] = sums[c] / counts[c];
       }
       const shift = newC.reduce((s, v, i) => s + Math.abs(v - centroids[i]), 0) / k;
       centroids = newC;
@@ -375,7 +400,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return Math.sqrt(arr.reduce((s, v) => s + (v - m) * (v - m), 0) / arr.length);
   }
 
-  // ---------- SMART DETECT (auto cols) ----------
+  // ---------- SMART DETECT (auto cols 2..maxCols) ----------
   const inferGrid = useCallback((tableRect, boxes) => {
     // pick words inside table
     let words = boxes.filter((bx) => {
@@ -393,7 +418,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     const longLineChars = 60;
     const longLineTokens = 12;
 
-    // helper: cluster rows by Y (keeps pairs together)
+    // helper: cluster rows by Y
     const clusterRows = (items, yPadTop = 0.6, yPadBottom = 0.6) => {
       const yItems = items.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "", xmid: w.x + w.w / 2 }));
       yItems.sort((a, b) => a.y - b.y);
@@ -413,7 +438,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           }
         }
       }
-      // clip vertical band to real rows (avoid footer)
       if (clusters.length) {
         const kMin = Math.min(...clusters.map(k => k.yMin));
         const kMax = Math.max(...clusters.map(k => k.yMax));
@@ -432,7 +456,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       return { rows: [], clipY0: tableRect.y, clipY1: tableRect.y + tableRect.h };
     };
 
-    // ---- A) Auto-detect columns (K in [2..maxCols])
+    // Auto-detect columns (K in [2..maxCols])
     if (autoCols) {
       const xm = words.map(w => w.x + w.w / 2);
       const xs = xm.slice().sort((a, b) => a - b);
@@ -441,23 +465,18 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       const KMAX = Math.max(2, Math.min(maxCols | 0, 12));
       for (let k = 2; k <= KMAX; k++) {
         const { centroids, labels } = kmeans1D(xs, k);
-        // compute inter (mean gap between centroids) and intra (avg stddev within clusters)
         const inter = centroids.length > 1
           ? centroids.slice(1).reduce((s, c, i) => s + (c - centroids[i]), 0) / (centroids.length - 1)
           : 0;
-
         const clusterBuckets = Array.from({ length: k }, () => []);
         xs.forEach((v, i) => clusterBuckets[labels[i]].push(v));
         const intra = clusterBuckets.reduce((s, arr) => s + stddev(arr), 0) / k;
-
-        // penalize empty/tiny clusters
         const tinyPenalty = clusterBuckets.filter(arr => arr.length < 3).length * 5;
         const score = inter - intra - tinyPenalty;
-
         if (score > best.score) best = { k, score, labels, centroids };
       }
 
-      // map back: for each word find nearest centroid
+      // map words -> nearest centroid
       const cents = best.centroids;
       const wordLabels = words.map(w => {
         const xmid = w.x + w.w / 2;
@@ -469,7 +488,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         return besti;
       });
 
-      // build column rects
+      // columns rects
       const byCol = Array.from({ length: best.k }, () => []);
       words.forEach((w, i) => byCol[wordLabels[i]].push(w));
       let cols = [];
@@ -500,101 +519,14 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         })
         .filter(Boolean);
 
-      // clip columns vertically to clipped band
+      // clip columns vertically
       cols = cols.map(c => ({ ...c, y: clipY0, h: clipY1 - clipY0 }));
       return { rows: rows.length ? rows : [tableRect], cols };
     }
 
-    // ---- B) Manual 2-column form (fallback)
-    if (form2Cols) {
-      const xs = words.map(w => w.x + w.w / 2).sort((a,b)=>a-b);
-      let maxGap = 0, splitX = null;
-      for (let i = 1; i < xs.length; i++) {
-        const gap = xs[i] - xs[i-1];
-        if (gap > maxGap) { maxGap = gap; splitX = (xs[i] + xs[i-1]) / 2; }
-      }
-      if (splitX != null && maxGap > Math.max(12, avgW * 0.8)) {
-        const x0 = tableRect.x, x1 = tableRect.x + tableRect.w;
-        let left  = { x: x0, y: tableRect.y, w: splitX - x0, h: tableRect.h };
-        let right = { x: splitX, y: tableRect.y, w: x1 - splitX, h: tableRect.h };
-
-        const { rows: rawRows, clipY0, clipY1 } = clusterRows(words);
-        const sideMargin = Math.max(8, avgW * 0.5);
-        const rows = rawRows
-          .map(r => {
-            const items = words.filter(w => w.y >= r.y - EPS && w.y + w.h <= r.y + r.h + EPS);
-            const text = items.map(i => i.it?.str || "").join(" ").trim();
-            if (text.length > longLineChars || items.length > longLineTokens) return null;
-            const hasLeft  = items.some(i => i.x + i.w / 2 < splitX - sideMargin);
-            const hasRight = items.some(i => i.x + i.w / 2 > splitX + sideMargin);
-            return (hasLeft || hasRight) ? r : null;
-          })
-          .filter(Boolean);
-
-        left  = { ...left,  y: clipY0, h: clipY1 - clipY0 };
-        right = { ...right, y: clipY0, h: clipY1 - clipY0 };
-        return { rows: rows.length ? rows : [tableRect], cols: [left, right] };
-      }
-    }
-
-    // ---- C) Simple X clustering fallback
-    const xItems = words.map(w => ({ x: w.x + w.w / 2, x0: w.x, x1: w.x + w.w }));
-    xItems.sort((a, b) => a.x - b.x);
-    const colClusters = [];
-    const colTh = Math.max(10, avgW * 1.1);
-    for (const it of xItems) {
-      const last = colClusters[colClusters.length - 1];
-      if (!last) colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
-      else {
-        const meanX = last.xs.reduce((s, v) => s + v, 0) / last.xs.length;
-        if (Math.abs(it.x - meanX) <= colTh) {
-          last.xMin = Math.min(last.xMin, it.x0);
-          last.xMax = Math.max(last.xMax, it.x1);
-          last.xs.push(it.x);
-        } else {
-          colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
-        }
-      }
-    }
-    let cols = colClusters.map(c => ({
-      x: Math.max(tableRect.x, c.xMin),
-      y: tableRect.y,
-      w: Math.max(8, Math.min(tableRect.x + tableRect.w, c.xMax) - Math.max(tableRect.x, c.xMin)),
-      h: tableRect.h,
-    })).filter(c => c.w > 6);
-    if (!cols.length) cols = [tableRect];
-
-    // rows
-    const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "" }));
-    yItems.sort((a, b) => a.y - b.y);
-    const rowClusters = [];
-    for (const it of yItems) {
-      const last = rowClusters[rowClusters.length - 1];
-      if (!last) rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
-      else {
-        const meanY = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
-        if (Math.abs(it.y - meanY) <= rowTh) {
-          last.yMin = Math.min(last.yMin, it.y0);
-          last.yMax = Math.max(last.yMax, it.y1);
-          last.ys.push(it.y);
-          last.items.push(it);
-        } else {
-          rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
-        }
-      }
-    }
-    const rows = rowClusters
-      .filter(c => (c.items.map(i => i.str).join(" ").trim().length <= longLineChars))
-      .map(c => ({
-        x: tableRect.x,
-        y: Math.max(tableRect.y, c.yMin),
-        w: tableRect.w,
-        h: Math.min(tableRect.y + tableRect.h, c.yMax) - Math.max(tableRect.y, c.yMin),
-      }))
-      .filter(r => r.h > 2);
-
-    return { rows: rows.length ? rows : [tableRect], cols };
-  }, [autoCols, maxCols, form2Cols]);
+    // fallback: whole rect
+    return { rows: [tableRect], cols: [tableRect] };
+  }, [autoCols, maxCols]);
 
   // build tables (autoBuild/manual/smartDetect)
   const buildTablesForPage = useCallback((page) => {
@@ -789,8 +721,17 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     }
   }
 
-  const collectOrderedRows = useCallback(() => {
+  // Zbierz dane wg kolejności DnD; bez meta wierszy + dodaj nagłówki z ustawień
+  const collectOrderedRows = useCallback((includeHeaders) => {
     const rows = [];
+
+    // 1) Nagłówki z panelu eksportu
+    if (includeHeaders) {
+      const header = TRANSACTION_COLUMNS.filter(c => selectedCols.has(c));
+      if (header.length) rows.push(header);
+    }
+
+    // 2) Tabele z wyników
     const pages = Object.keys(pageData).map((n) => +n)
       .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
       .sort((a, b) => a - b);
@@ -804,30 +745,34 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         const orderedCols = (T.cells[0] && ord.col?.length === T.cells[0].length) ? ord.col : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
         orderedRows.forEach((ri) => rows.push(orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "")));
       });
+      // Loose jako osobne wiersze (1 kolumna)
       if (d.loose?.length) d.loose.forEach((frag) => rows.push([frag.text || ""]));
     }
+
     if (rows.length === 0) rows.push([]);
     return rows;
-  }, [pageData, tableOrders]);
+  }, [pageData, tableOrders, selectedCols]);
 
-  const handleExportCSV = async () => {
-    const rows = collectOrderedRows();
-    const csv = buildCSV(rows);
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
+  // Export handlers (z panelu)
+  const doExport = async () => {
     const base = String(docName || "file").replace(/\.[^.]+$/, "");
-    a.download = `${base}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-  const handleExportXLSX = async () => {
-    const rows = collectOrderedRows();
-    const base = String(docName || "file").replace(/\.[^.]+$/, "");
-    await buildAndDownloadXLSX(rows, base);
+    const rows = collectOrderedRows(true); // Z NAGŁÓWKAMI z checkboxów
+
+    if (exportType === "csv") {
+      const csv = buildCSV(rows);
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${base}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } else {
+      await buildAndDownloadXLSX(rows, base);
+    }
+    setShowExport(false);
   };
 
   // ---- UI
@@ -861,7 +806,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => { setActiveIndex(-1); setPageNum((n)=>Math.min(pageCount, n+1)); }}>Next &gt;</button>
         <button className="px-3 py-1 border rounded hover:bg-gray-100" onClick={() => setReloadTick((t) => t + 1)}>Reload</button>
 
-        <div className="ml-auto flex flex-wrap items-center gap-4">
+        <div className="ml-auto flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={autoBuild} onChange={(e)=>setAutoBuild(e.target.checked)} />
             Auto-build table from row/col
@@ -871,31 +816,15 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             Smart-detect rows/cols
           </label>
 
-          {/* NEW: dynamic columns */}
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={autoCols} onChange={(e)=>setAutoCols(e.target.checked)} />
-            Auto-detect columns (2–{maxCols})
-          </label>
-          <label className="flex items-center gap-1 text-sm">
-            max:
-            <input
-              className="w-14 border rounded px-1 py-0.5"
-              type="number" min={2} max={12}
-              value={maxCols}
-              onChange={(e)=>setMaxCols(Math.max(2, Math.min(12, Number(e.target.value)||6)))}
-            />
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form2Cols} onChange={(e)=>setForm2Cols(e.target.checked)} disabled={autoCols}/>
-            Form layout (2 cols)
-          </label>
-
-          <Legend label="Table" color={COLORS.table[0]} />
-          <Legend label="Column" color={COLORS.column[0]} />
-          <Legend label="Row" color={COLORS.row[0]} />
-
-          <button onClick={handleExportCSV} className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700">Export CSV</button>
-          <button onClick={handleExportXLSX} className="px-4 py-2 rounded-md text-white font-semibold bg-indigo-600 hover:bg-indigo-700">Export XLSX</button>
+          {/* Export gear */}
+          <button
+            onClick={()=>setShowExport(true)}
+            className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700 flex items-center gap-2"
+            title="Export Statement"
+          >
+            <span>Export Statement</span>
+            <span aria-hidden>⚙️</span>
+          </button>
         </div>
       </div>
 
@@ -1120,15 +1049,60 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           )}
         </div>
       </div>
-    </div>
-  );
-}
 
-function Legend({ label, color }) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="inline-block w-3 h-3 rounded" style={{ background: color }} />
-      <span>{label}</span>
+      {/* ===== Export modal ===== */}
+      {showExport && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setShowExport(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-xl p-5" onClick={(e)=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Export Statement</h3>
+              <button className="text-gray-500 hover:text-gray-700" onClick={()=>setShowExport(false)}>✕</button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <div className="text-sm font-medium mb-1">Select File Type</div>
+                <div className="flex gap-4 text-sm">
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="ft" value="xlsx" checked={exportType==="xlsx"} onChange={()=>setExportType("xlsx")} />
+                    XLSX
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" name="ft" value="csv" checked={exportType==="csv"} onChange={()=>setExportType("csv")} />
+                    CSV
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Zaznaczone poniżej nagłówki zostaną dodane jako pierwszy wiersz w eksporcie {exportType.toUpperCase()}.
+                </p>
+              </div>
+
+              <div>
+                <div className="text-sm font-medium mb-2">Transaction Columns</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                  {TRANSACTION_COLUMNS.map((label) => (
+                    <label key={label} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedCols.has(label)}
+                        onChange={()=>toggleCol(label)}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button className="px-4 py-2 rounded-md border hover:bg-gray-50" onClick={()=>setShowExport(false)}>Cancel</button>
+              <button className="px-4 py-2 rounded-md text-white font-semibold bg-emerald-600 hover:bg-emerald-700" onClick={doExport}>
+                Export {exportType.toUpperCase()}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
