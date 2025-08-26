@@ -109,7 +109,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [dragHover, setDragHover] = useState(null);
 
   // ===== AI Parsing =====
-  const [useAIParsing, setUseAIParsing] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
 
   // ===== Export Settings (⚙️) =====
@@ -952,47 +951,42 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     const header = TRANSACTION_COLUMNS.filter(c => selectedCols.has(c));
     if (includeHeaders && header.length) rows.push(header);
 
-    // If using AI parsing, collect all text and parse it as a whole
-    if (useAIParsing) {
-      let allText = "";
-      const pages = Object.keys(pageData).map((n) => +n)
-        .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
-        .sort((a, b) => a - b);
+    // Always use AI parsing
+    let allText = "";
+    const pages = Object.keys(pageData).map((n) => +n)
+      .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
+      .sort((a, b) => a - b);
 
-      for (const p of pages) {
-        const d = pageData[p];
-        d.tables.forEach((T, ti) => {
-          const orders = tableOrders[p] || {};
-          const ord = orders[ti] || {};
-          const orderedRows = (ord.row?.length === T.cells.length) ? ord.row : Array.from({ length: T.cells.length }, (_, i) => i);
-          const orderedCols = (T.cells[0] && ord.col?.length === T.cells[0].length) ? ord.col : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
+    for (const p of pages) {
+      const d = pageData[p];
+      d.tables.forEach((T, ti) => {
+        const orders = tableOrders[p] || {};
+        const ord = orders[ti] || {};
+        const orderedRows = (ord.row?.length === T.cells.length) ? ord.row : Array.from({ length: T.cells.length }, (_, i) => i);
+        const orderedCols = (T.cells[0] && ord.col?.length === T.cells[0].length) ? ord.col : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
 
-          orderedRows.forEach((ri) => {
-            const rawCells = orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "");
-            const joined = rawCells.join(" ").replace(/\s{2,}/g, " ").trim();
-            if (joined) allText += joined + "\n";
-          });
+        orderedRows.forEach((ri) => {
+          const rawCells = orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "");
+          const joined = rawCells.join(" ").replace(/\s{2,}/g, " ").trim();
+          if (joined) allText += joined + "\n";
         });
+      });
 
-        (d.loose || []).forEach((frag) => {
-          const text = (frag.text || "").trim();
-          if (text) allText += text + "\n";
-        });
-      }
-
-      if (allText.trim()) {
-        const transactions = await parseWithAI(allText);
-        transactions.forEach((parsed) => {
-          const outRow = header.map((h) => parsed[h] ?? "");
-          rows.push(outRow);
-        });
-      }
-      return rows;
+      (d.loose || []).forEach((frag) => {
+        const text = (frag.text || "").trim();
+        if (text) allText += text + "\n";
+      });
     }
 
-    // When AI parsing is enabled, we only use AI parsing and don't fall back to heuristic parsing
+    if (allText.trim()) {
+      const transactions = await parseWithAI(allText);
+      transactions.forEach((parsed) => {
+        const outRow = header.map((h) => parsed[h] ?? "");
+        rows.push(outRow);
+      });
+    }
     return rows;
-  }, [pageData, tableOrders, selectedCols, mapDetectedRows, useAIParsing, parseWithAI]);
+  }, [pageData, tableOrders, selectedCols, parseWithAI]);
 
   // Export handlers
   const doExport = async () => {
@@ -1402,19 +1396,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                   </label>
                   <p className="text-xs text-gray-500">
                     Heurystyka: data, kwoty (Amount/Credit/Debit), saldo (Balance), waluta, opis (Description).
-                  </p>
-                </div>
-                <div className="mt-3">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={useAIParsing}
-                      onChange={(e) => setUseAIParsing(e.target.checked)}
-                    />
-                    Use AI parsing for better transaction extraction
-                  </label>
-                  <p className="text-xs text-gray-500">
-                    Uses AI to improve transaction data extraction (may take longer).
                   </p>
                 </div>
               </div>
