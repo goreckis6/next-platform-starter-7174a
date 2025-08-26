@@ -990,52 +990,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       return rows;
     }
 
-    // Original parsing logic
-    const pages = Object.keys(pageData).map((n) => +n)
-      .filter((p) => (pageData[p]?.tables?.length || pageData[p]?.loose?.length || 0) > 0)
-      .sort((a, b) => a - b);
-
-    for (const p of pages) {
-      const d = pageData[p];
-      const orders = tableOrders[p] || {};
-
-      d.tables.forEach((T, ti) => {
-        const ord = orders[ti] || {};
-        const orderedRows = (ord.row?.length === T.cells.length) ? ord.row : Array.from({ length: T.cells.length }, (_, i) => i);
-        const orderedCols = (T.cells[0] && ord.col?.length === T.cells[0].length) ? ord.col : Array.from({ length: (T.cells[0]?.length || 0) }, (_, i) => i);
-
-        orderedRows.forEach((ri) => {
-          const rawCells = orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "");
-          if (mapDetectedRows && header.length) {
-            const joined = rawCells.join(" ").replace(/\s{2,}/g, " ").trim();
-            // Use enhanced parsing that can detect multiple transactions
-            const transactions = parseMultipleTransactions(joined);
-            transactions.forEach((parsed) => {
-              const outRow = header.map((h) => parsed[h] ?? "");
-              rows.push(outRow);
-            });
-          } else {
-            rows.push(rawCells);
-          }
-        });
-      });
-
-      (d.loose || []).forEach((frag) => {
-        const text = (frag.text || "").trim();
-        if (mapDetectedRows && header.length) {
-          // Use enhanced parsing that can detect multiple transactions
-          const transactions = parseMultipleTransactions(text);
-          transactions.forEach((parsed) => {
-            const outRow = header.map((h) => parsed[h] ?? "");
-            rows.push(outRow);
-          });
-        } else {
-          rows.push([text]);
-        }
-      });
-    }
-
-    if (rows.length === 0) rows.push(header.length ? header.slice(0) : []);
+    // When AI parsing is enabled, we only use AI parsing and don't fall back to heuristic parsing
     return rows;
   }, [pageData, tableOrders, selectedCols, mapDetectedRows, useAIParsing, parseWithAI]);
 

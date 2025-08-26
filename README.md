@@ -65,9 +65,10 @@ To use the AI parsing feature with ChatGPT:
 
 1. Obtain an OpenAI API key from https://platform.openai.com/
 2. Set the `OPENAI_API_KEY` environment variable with your API key
-3. The AI parsing will automatically use ChatGPT to extract transaction data
+3. Enable the "Use AI parsing for better transaction extraction" option in the export modal
+4. The AI parsing will automatically use ChatGPT to extract transaction data
 
-The AI parsing feature provides better results for complex bank statements by using advanced algorithms to identify and extract transaction data more accurately.
+The AI parsing feature provides better results for complex bank statements by using advanced algorithms to identify and extract transaction data more accurately. When enabled, it completely replaces the heuristic parsing with AI-based parsing for more accurate results.
 
 ## Testing
 
