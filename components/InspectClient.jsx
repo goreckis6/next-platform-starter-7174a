@@ -19,6 +19,7 @@ const EPS = 0.25;
 const OVERLAP_T = 0.35;
 const SHOW_HANDLES = false;
 
+// ---- geometry helpers
 function pointInRect(px, py, r) {
   return px >= r.x - EPS && px <= r.x + r.w + EPS && py >= r.y - EPS && py <= r.y + r.h + EPS;
 }
@@ -46,6 +47,7 @@ function arrayMove(arr, from, to) {
   return a;
 }
 
+// ---- optional handles (hidden)
 const HandleDots = ({ r, active, onMouseDown }) =>
   active && SHOW_HANDLES ? (
     <>
@@ -98,9 +100,13 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   const [tableOrders, setTableOrders] = useState({});
   const [autoBuild, setAutoBuild] = useState(true);
   const [smartDetect, setSmartDetect] = useState(true);
-  const [form2Cols, setForm2Cols] = useState(true);
-  const [manualLinks, setManualLinks] = useState({});
 
+  // NEW: dynamic columns
+  const [autoCols, setAutoCols] = useState(true);  // auto-detect 2..6
+  const [maxCols, setMaxCols] = useState(6);
+  const [form2Cols, setForm2Cols] = useState(false); // manual 2 columns (fallback style)
+
+  const [manualLinks, setManualLinks] = useState({});
   const [draggingLoose, setDraggingLoose] = useState(null);
   const [dragHover, setDragHover] = useState(null);
 
@@ -121,6 +127,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return name || "file.pdf";
   }, [pdfNameProp, pdfUrl, pdfData]);
 
+  // init pdfjs
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -138,6 +145,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return () => { mounted = false; };
   }, []);
 
+  // load doc
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -169,6 +177,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return () => { mounted = false; };
   }, [pdfUrl, pdfData, pdfjs, reloadTick, deriveDocName]);
 
+  // render + text
   const renderPage = useCallback(async () => {
     if (!pdfDoc || !canvasRef.current) return;
     const page = await pdfDoc.getPage(pageNum);
@@ -184,6 +193,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
   }, [pdfDoc, pageNum, scale]);
   useEffect(() => { renderPage().catch((e) => console.error("Render error:", e)); }, [renderPage]);
 
+  // selections helpers
   const current = selections[pageNum] || [];
   const setCurrent = (updater) =>
     setSelections((prev) => {
@@ -192,6 +202,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       return { ...prev, [pageNum]: next };
     });
 
+  // toolbar actions
   const zoomIn = () => setScale((s) => Math.min(4, Math.round((s + 0.1) * 100) / 100));
   const zoomOut = () => setScale((s) => Math.max(0.2, Math.round((s - 0.1) * 100) / 100));
   const prevPage = () => { setActiveIndex(-1); setPageNum((n) => Math.max(1, n - 1)); };
@@ -199,6 +210,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   const nextColorFor = (t) => { const list = COLORS[t]; const i = colorIndexRef.current[t] % list.length; colorIndexRef.current[t] = i + 1; return list[i]; };
 
+  // hit tests
   const pxFromNorm = (nr) => fromNorm(nr, viewport.width, viewport.height);
   const hitTestBox = (x, y) => { for (let i = current.length - 1; i >= 0; i--) { const r = pxFromNorm(current[i].rect); if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return i; } return -1; };
   const hitTestHandle = (x, y, idx) => {
@@ -213,6 +225,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return null;
   };
 
+  // mouse
   const onMouseDown = (e) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -272,6 +285,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     setDraft(null);
   };
 
+  // keyboard
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Delete" || e.key === "Backspace") {
@@ -290,6 +304,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return () => window.removeEventListener("keydown", onKey);
   }, [activeIndex, pageNum, pageCount]);
 
+  // text boxes in viewport coords
   const getTextBoxesForPage = useCallback((pageNumber) => {
     const entry = textCache[pageNumber];
     if (!entry || !pdfjs) return [];
@@ -312,12 +327,62 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return picked.map((bx) => bx.it.str).join(" ");
   }, []);
 
-  // >>>>>>>>>>>>>>>>>  KLUCZOWA ZMIANA  <<<<<<<<<<<<<<<<<
+  // ---------- KMEANS 1D HELPERS ----------
+  function kmeans1D(xs, k, maxIter = 25) {
+    if (k <= 1) return { centroids: [mean(xs)], labels: xs.map(() => 0) };
+    const min = xs[0], max = xs[xs.length - 1];
+    let centroids = Array.from({ length: k }, (_, i) => min + ((i + 0.5) / k) * (max - min));
+    let labels = new Array(xs.length).fill(0);
+
+    for (let iter = 0; iter < maxIter; iter++) {
+      // assign
+      for (let i = 0; i < xs.length; i++) {
+        let best = 0, bestd = Infinity;
+        for (let c = 0; c < k; c++) {
+          const d = Math.abs(xs[i] - centroids[c]);
+          if (d < bestd) { bestd = d; best = c; }
+        }
+        labels[i] = best;
+      }
+      // recompute
+      const sums = new Array(k).fill(0);
+      const counts = new Array(k).fill(0);
+      for (let i = 0; i < xs.length; i++) { sums[labels[i]] += xs[i]; counts[labels[i]]++; }
+      const newC = centroids.slice();
+      for (let c = 0; c < k; c++) {
+        if (counts[c] === 0) {
+          // empty cluster: nudge between neighbors
+          newC[c] = min + Math.random() * (max - min);
+        } else {
+          newC[c] = sums[c] / counts[c];
+        }
+      }
+      const shift = newC.reduce((s, v, i) => s + Math.abs(v - centroids[i]), 0) / k;
+      centroids = newC;
+      if (shift < 1e-3) break;
+    }
+    // sort centroids ascending and relabel
+    const order = centroids.map((v, i) => [v, i]).sort((a, b) => a[0] - b[0]).map(([_, i]) => i);
+    const centSorted = order.map((oi) => centroids[oi]);
+    const mapOldToNew = new Map(order.map((oi, newi) => [oi, newi]));
+    const labelsSorted = labels.map((l) => mapOldToNew.get(l));
+    return { centroids: centSorted, labels: labelsSorted };
+  }
+  function mean(arr) { return arr.reduce((s, v) => s + v, 0) / Math.max(1, arr.length); }
+  function stddev(arr) {
+    if (!arr.length) return 0;
+    const m = mean(arr);
+    return Math.sqrt(arr.reduce((s, v) => s + (v - m) * (v - m), 0) / arr.length);
+  }
+
+  // ---------- SMART DETECT (auto cols) ----------
   const inferGrid = useCallback((tableRect, boxes) => {
+    // pick words inside table
     let words = boxes.filter((bx) => {
       const cx = bx.x + bx.w / 2, cy = bx.y + bx.h / 2;
       return pointInRect(cx, cy, tableRect);
     });
+    // remove dotted noise
     const noiseRe = /^[\s.\-–—·•]+$/u;
     words = words.filter(w => !noiseRe.test((w.it?.str || "").trim()));
     if (words.length < 2) return { rows: [tableRect], cols: [tableRect] };
@@ -325,10 +390,122 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     const avgH = words.reduce((s, w) => s + w.h, 0) / words.length;
     const avgW = words.reduce((s, w) => s + w.w, 0) / words.length;
     const rowTh = Math.max(6, avgH * 0.7);
-    const longLineChars = 60;    // próg „akapit”
-    const longLineTokens = 12;   // próg „akapit”
-    const sideMargin = Math.max(8, avgW * 0.5);
+    const longLineChars = 60;
+    const longLineTokens = 12;
 
+    // helper: cluster rows by Y (keeps pairs together)
+    const clusterRows = (items, yPadTop = 0.6, yPadBottom = 0.6) => {
+      const yItems = items.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "", xmid: w.x + w.w / 2 }));
+      yItems.sort((a, b) => a.y - b.y);
+      const clusters = [];
+      for (const it of yItems) {
+        const last = clusters[clusters.length - 1];
+        if (!last) clusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
+        else {
+          const meanY = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
+          if (Math.abs(it.y - meanY) <= rowTh) {
+            last.yMin = Math.min(last.yMin, it.y0);
+            last.yMax = Math.max(last.yMax, it.y1);
+            last.ys.push(it.y);
+            last.items.push(it);
+          } else {
+            clusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
+          }
+        }
+      }
+      // clip vertical band to real rows (avoid footer)
+      if (clusters.length) {
+        const kMin = Math.min(...clusters.map(k => k.yMin));
+        const kMax = Math.max(...clusters.map(k => k.yMax));
+        const clipY0 = Math.max(tableRect.y, kMin - avgH * yPadTop);
+        const clipY1 = Math.min(tableRect.y + tableRect.h, kMax + avgH * yPadBottom);
+        return {
+          rows: clusters.map(c => ({
+            x: tableRect.x,
+            y: Math.max(clipY0, c.yMin),
+            w: tableRect.w,
+            h: Math.min(clipY1, c.yMax) - Math.max(clipY0, c.yMin),
+          })).filter(r => r.h > 2),
+          clipY0, clipY1
+        };
+      }
+      return { rows: [], clipY0: tableRect.y, clipY1: tableRect.y + tableRect.h };
+    };
+
+    // ---- A) Auto-detect columns (K in [2..maxCols])
+    if (autoCols) {
+      const xm = words.map(w => w.x + w.w / 2);
+      const xs = xm.slice().sort((a, b) => a - b);
+
+      let best = { k: 1, score: -Infinity, labels: null, centroids: null };
+      const KMAX = Math.max(2, Math.min(maxCols | 0, 12));
+      for (let k = 2; k <= KMAX; k++) {
+        const { centroids, labels } = kmeans1D(xs, k);
+        // compute inter (mean gap between centroids) and intra (avg stddev within clusters)
+        const inter = centroids.length > 1
+          ? centroids.slice(1).reduce((s, c, i) => s + (c - centroids[i]), 0) / (centroids.length - 1)
+          : 0;
+
+        const clusterBuckets = Array.from({ length: k }, () => []);
+        xs.forEach((v, i) => clusterBuckets[labels[i]].push(v));
+        const intra = clusterBuckets.reduce((s, arr) => s + stddev(arr), 0) / k;
+
+        // penalize empty/tiny clusters
+        const tinyPenalty = clusterBuckets.filter(arr => arr.length < 3).length * 5;
+        const score = inter - intra - tinyPenalty;
+
+        if (score > best.score) best = { k, score, labels, centroids };
+      }
+
+      // map back: for each word find nearest centroid
+      const cents = best.centroids;
+      const wordLabels = words.map(w => {
+        const xmid = w.x + w.w / 2;
+        let besti = 0, bestd = Infinity;
+        for (let i = 0; i < cents.length; i++) {
+          const d = Math.abs(xmid - cents[i]);
+          if (d < bestd) { bestd = d; besti = i; }
+        }
+        return besti;
+      });
+
+      // build column rects
+      const byCol = Array.from({ length: best.k }, () => []);
+      words.forEach((w, i) => byCol[wordLabels[i]].push(w));
+      let cols = [];
+      for (let ci = 0; ci < byCol.length; ci++) {
+        const pts = byCol[ci];
+        if (!pts.length) continue;
+        const x0 = Math.min(...pts.map(p => p.x));
+        const x1 = Math.max(...pts.map(p => p.x + p.w));
+        cols.push({
+          x: Math.max(tableRect.x, x0),
+          y: tableRect.y,
+          w: Math.max(8, Math.min(tableRect.x + tableRect.w, x1) - Math.max(tableRect.x, x0)),
+          h: tableRect.h,
+        });
+      }
+      cols.sort((a, b) => a.x - b.x);
+      if (!cols.length) cols = [tableRect];
+
+      // rows (cluster Y) + filter long paragraphs
+      const { rows: rawRows, clipY0, clipY1 } = clusterRows(words);
+      const rows = rawRows
+        .map(r => {
+          const lineText = words
+            .filter(w => w.y >= r.y - EPS && w.y + w.h <= r.y + r.h + EPS)
+            .map(w => (w.it?.str || "").trim()).join(" ");
+          const tokenCount = lineText.split(/\s+/).filter(Boolean).length;
+          return (lineText.length > longLineChars || tokenCount > longLineTokens) ? null : r;
+        })
+        .filter(Boolean);
+
+      // clip columns vertically to clipped band
+      cols = cols.map(c => ({ ...c, y: clipY0, h: clipY1 - clipY0 }));
+      return { rows: rows.length ? rows : [tableRect], cols };
+    }
+
+    // ---- B) Manual 2-column form (fallback)
     if (form2Cols) {
       const xs = words.map(w => w.x + w.w / 2).sort((a,b)=>a-b);
       let maxGap = 0, splitX = null;
@@ -336,68 +513,31 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
         const gap = xs[i] - xs[i-1];
         if (gap > maxGap) { maxGap = gap; splitX = (xs[i] + xs[i-1]) / 2; }
       }
-      if (splitX !== null && maxGap > Math.max(12, avgW * 0.8)) {
+      if (splitX != null && maxGap > Math.max(12, avgW * 0.8)) {
         const x0 = tableRect.x, x1 = tableRect.x + tableRect.w;
-        const leftCol  = { x: x0, y: tableRect.y, w: splitX - x0, h: tableRect.h };
-        const rightCol = { x: splitX, y: tableRect.y, w: x1 - splitX, h: tableRect.h };
+        let left  = { x: x0, y: tableRect.y, w: splitX - x0, h: tableRect.h };
+        let right = { x: splitX, y: tableRect.y, w: x1 - splitX, h: tableRect.h };
 
-        // klastrowanie Y
-        const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "" , xmid: w.x + w.w/2 }));
-        yItems.sort((a, b) => a.y - b.y);
-        const clusters = [];
-        for (const it of yItems) {
-          const last = clusters[clusters.length - 1];
-          if (!last) clusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
-          else {
-            const mean = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
-            if (Math.abs(it.y - mean) <= rowTh) {
-              last.yMin = Math.min(last.yMin, it.y0);
-              last.yMax = Math.max(last.yMax, it.y1);
-              last.ys.push(it.y);
-              last.items.push(it);
-            } else {
-              clusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
-            }
-          }
-        }
+        const { rows: rawRows, clipY0, clipY1 } = clusterRows(words);
+        const sideMargin = Math.max(8, avgW * 0.5);
+        const rows = rawRows
+          .map(r => {
+            const items = words.filter(w => w.y >= r.y - EPS && w.y + w.h <= r.y + r.h + EPS);
+            const text = items.map(i => i.it?.str || "").join(" ").trim();
+            if (text.length > longLineChars || items.length > longLineTokens) return null;
+            const hasLeft  = items.some(i => i.x + i.w / 2 < splitX - sideMargin);
+            const hasRight = items.some(i => i.x + i.w / 2 > splitX + sideMargin);
+            return (hasLeft || hasRight) ? r : null;
+          })
+          .filter(Boolean);
 
-        // filtr „akapitów” + wymagamy obecności treści po którejkolwiek stronie splitu
-        const kept = clusters.filter(c => {
-          const text = c.items.map(i => i.str).join(" ").trim();
-          if (text.length > longLineChars || c.items.length > longLineTokens) return false; // akapit
-          const hasLeft  = c.items.some(i => i.xmid < splitX - sideMargin);
-          const hasRight = c.items.some(i => i.xmid > splitX + sideMargin);
-          return hasLeft || hasRight;
-        });
-
-        // jeśli nic nie zostało – fallback niżej
-        if (kept.length) {
-          // przytnij pionowy zakres tabeli pod realne wiersze (usuwa stopki)
-          const kMin = Math.min(...kept.map(k => k.yMin));
-          const kMax = Math.max(...kept.map(k => k.yMax));
-          const clippedRect = {
-            x: tableRect.x,
-            y: Math.max(tableRect.y, kMin - avgH * 0.6),
-            w: tableRect.w,
-            h: Math.min(tableRect.y + tableRect.h, kMax + avgH * 0.6) - Math.max(tableRect.y, kMin - avgH * 0.6),
-          };
-
-          const rows = kept.map(c => ({
-            x: clippedRect.x,
-            y: Math.max(clippedRect.y, c.yMin),
-            w: clippedRect.w,
-            h: Math.min(clippedRect.y + clippedRect.h, c.yMax) - Math.max(clippedRect.y, c.yMin),
-          })).filter(r => r.h > 2);
-
-          const leftClip  = { ...leftCol,  y: clippedRect.y, h: clippedRect.h };
-          const rightClip = { ...rightCol, y: clippedRect.y, h: clippedRect.h };
-
-          return { rows: rows.length ? rows : [clippedRect], cols: [leftClip, rightClip] };
-        }
+        left  = { ...left,  y: clipY0, h: clipY1 - clipY0 };
+        right = { ...right, y: clipY0, h: clipY1 - clipY0 };
+        return { rows: rows.length ? rows : [tableRect], cols: [left, right] };
       }
     }
 
-    // fallback X-clustering (po filtrze szumu)
+    // ---- C) Simple X clustering fallback
     const xItems = words.map(w => ({ x: w.x + w.w / 2, x0: w.x, x1: w.x + w.w }));
     xItems.sort((a, b) => a.x - b.x);
     const colClusters = [];
@@ -406,8 +546,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       const last = colClusters[colClusters.length - 1];
       if (!last) colClusters.push({ xMin: it.x0, xMax: it.x1, xs: [it.x] });
       else {
-        const mean = last.xs.reduce((s, v) => s + v, 0) / last.xs.length;
-        if (Math.abs(it.x - mean) <= colTh) {
+        const meanX = last.xs.reduce((s, v) => s + v, 0) / last.xs.length;
+        if (Math.abs(it.x - meanX) <= colTh) {
           last.xMin = Math.min(last.xMin, it.x0);
           last.xMax = Math.max(last.xMax, it.x1);
           last.xs.push(it.x);
@@ -424,6 +564,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     })).filter(c => c.w > 6);
     if (!cols.length) cols = [tableRect];
 
+    // rows
     const yItems = words.map(w => ({ y: w.y + w.h / 2, y0: w.y, y1: w.y + w.h, str: w.it?.str || "" }));
     yItems.sort((a, b) => a.y - b.y);
     const rowClusters = [];
@@ -431,8 +572,8 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       const last = rowClusters[rowClusters.length - 1];
       if (!last) rowClusters.push({ yMin: it.y0, yMax: it.y1, ys: [it.y], items: [it] });
       else {
-        const mean = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
-        if (Math.abs(it.y - mean) <= rowTh) {
+        const meanY = last.ys.reduce((s, v) => s + v, 0) / last.ys.length;
+        if (Math.abs(it.y - meanY) <= rowTh) {
           last.yMin = Math.min(last.yMin, it.y0);
           last.yMax = Math.max(last.yMax, it.y1);
           last.ys.push(it.y);
@@ -453,9 +594,9 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       .filter(r => r.h > 2);
 
     return { rows: rows.length ? rows : [tableRect], cols };
-  }, [form2Cols]);
-  // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+  }, [autoCols, maxCols, form2Cols]);
 
+  // build tables (autoBuild/manual/smartDetect)
   const buildTablesForPage = useCallback((page) => {
     const sels = selections[page] || [];
     if (viewport.width === 0 || viewport.height === 0) return { tables: [], loose: [] };
@@ -508,6 +649,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       baseTables = [{ rect: tRect, rows: [], cols: [] }];
     }
 
+    // manual attachments from Loose
     const manual = manualLinks[page] || {};
     baseTables = baseTables.map((Tb, ti) => {
       const add = manual[ti] || { addRows: [], addCols: [] };
@@ -516,6 +658,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       return { ...Tb, rows: rowsMerged, cols: colsMerged };
     });
 
+    // infer missing rows/cols
     baseTables = baseTables.map((Tb) => {
       if (!smartDetect) return Tb;
       const needRows = (Tb.rows?.length || 0) === 0;
@@ -529,6 +672,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       };
     });
 
+    // loose
     const allAssignedRects = new Set();
     baseTables.forEach((T) => {
       T.rows.forEach((r) => allAssignedRects.add(JSON.stringify(r)));
@@ -547,6 +691,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return { tables: baseTables, loose };
   }, [selections, viewport.width, viewport.height, autoBuild, smartDetect, manualLinks, getTextBoxesForPage, inferGrid]);
 
+  // text to cells
   useEffect(() => {
     if (!pdfDoc) return;
     const pages = Object.keys(textCache).map((k) => +k);
@@ -581,6 +726,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     });
   }, [selections, textCache, viewport.width, viewport.height, pdfDoc, buildTablesForPage, getTextBoxesForPage, collectTextInRect]);
 
+  // default orders for DnD
   useEffect(() => {
     setTableOrders((prev) => {
       const out = { ...prev };
@@ -603,10 +749,10 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
 
   const currentPageData = pageData[pageNum] || { tables: [], loose: [] };
 
+  // CSV/XLSX
   function buildCSV(rows) {
     return rows.map((r) => r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   }
-
   async function ensureXLSX() {
     if (typeof window === "undefined") throw new Error("XLSX is only available in browser.");
     if (window.XLSX) return window.XLSX;
@@ -684,6 +830,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     await buildAndDownloadXLSX(rows, base);
   };
 
+  // ---- UI
   return (
     <div className="w-full">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -723,8 +870,23 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             <input type="checkbox" checked={smartDetect} onChange={(e)=>setSmartDetect(e.target.checked)} />
             Smart-detect rows/cols
           </label>
+
+          {/* NEW: dynamic columns */}
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form2Cols} onChange={(e)=>setForm2Cols(e.target.checked)} />
+            <input type="checkbox" checked={autoCols} onChange={(e)=>setAutoCols(e.target.checked)} />
+            Auto-detect columns (2–{maxCols})
+          </label>
+          <label className="flex items-center gap-1 text-sm">
+            max:
+            <input
+              className="w-14 border rounded px-1 py-0.5"
+              type="number" min={2} max={12}
+              value={maxCols}
+              onChange={(e)=>setMaxCols(Math.max(2, Math.min(12, Number(e.target.value)||6)))}
+            />
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form2Cols} onChange={(e)=>setForm2Cols(e.target.checked)} disabled={autoCols}/>
             Form layout (2 cols)
           </label>
 
@@ -738,6 +900,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[auto_540px] gap-6">
+        {/* LEFT: canvas */}
         <div
           className="relative inline-block select-none"
           ref={containerRef}
@@ -793,12 +956,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           )}
         </div>
 
-        {/* Wyniki + DnD (jak wcześniej) */}
+        {/* RIGHT: results + DnD */}
         <div className="border rounded-lg p-3 bg-white/60 overflow-auto max-h-[80vh]">
           <div className="font-semibold mb-2">Wyniki (page {pageNum})</div>
 
           {currentPageData.tables.length === 0 && currentPageData.loose.length === 0 ? (
-            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE, włącz Auto-build (row/col), albo włącz Smart-detect.</div>
+            <div className="text-sm text-gray-500">Brak danych — narysuj TABLE, włącz Auto-build, albo Smart-detect.</div>
           ) : null}
 
           {currentPageData.tables.map((T, ti) => {
@@ -808,6 +971,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             const setRowOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: next, col: colOrder } } }));
             const setColOrder = (next) => setTableOrders((prev)=>({ ...prev, [pageNum]: { ...(prev[pageNum]||{}), [ti]: { row: rowOrder, col: next } } }));
 
+            // DnD sorting
             let dragCol = -1; let dragRow = -1;
             const onColDragStart = (i)=> (e)=>{ dragCol = i; e.dataTransfer.effectAllowed = 'move'; };
             const onColDragOver  = ()=> (e)=>{ e.preventDefault(); };
@@ -824,6 +988,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             const orderedRows = rowOrder.length ? rowOrder : Array.from({length: T.cells.length}, (_,i)=>i);
             const orderedCols = colOrder.length ? colOrder : Array.from({length: (T.cells[0]?.length||0)}, (_,i)=>i);
 
+            // Loose attach
             const acceptLoose = (typeExpected) => (e) => {
               e.preventDefault();
               const payload = e.dataTransfer.getData("loose");
@@ -842,7 +1007,6 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
               setDraggingLoose(null);
               setDragHover(null);
             };
-
             const onDragEnterZone = (zone) => (e) => { e.preventDefault(); if (!draggingLoose) return; setDragHover({ table: ti, zone }); };
             const onDragLeaveZone = (zone) => (e) => { e.preventDefault(); if (!draggingLoose) return; setDragHover((h) => (h && h.table === ti && h.zone === zone ? null : h)); };
 
@@ -853,6 +1017,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
               <div key={ti} className="mb-6">
                 <div className="text-sm font-medium mb-2">Table #{ti + 1} — {T.rows.length} rows × {T.cols.length} cols</div>
 
+                {/* Drop zones */}
                 <div className="flex flex-wrap gap-3 mb-2 text-xs">
                   <div
                     onDragOver={(e)=>e.preventDefault()}
@@ -876,6 +1041,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
                   </div>
                 </div>
 
+                {/* Column reorder bar */}
                 <div className="flex items-center gap-2 mb-2 text-xs">
                   <span className="text-gray-500">Columns:</span>
                   {orderedCols.map((ci, idx)=> (
@@ -929,6 +1095,7 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
             );
           })}
 
+          {/* LOose list */}
           {currentPageData.loose.length > 0 && (
             <>
               <div className="text-sm font-medium mt-4 mb-1">Loose selections (drag to table)</div>
