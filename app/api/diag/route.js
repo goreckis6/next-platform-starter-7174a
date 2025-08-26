@@ -13,8 +13,8 @@ export async function GET() {
   return J({
     hasKey: Boolean(key),
     keyLen: key.length || 0,
-    sample: key ? `${key.slice(0, 4)}...${key.slice(-4)}` : null, // tylko podgląd
-    node: process.version,                 // wersja Node w runtime
-    envKnown: Object.keys(process.env).length, // liczba dostępnych env (bez wartości)
+    sample: key ? `${key.slice(0, 4)}...${key.slice(-4)}` : null,
+    node: process.version,
+    envKnown: Object.keys(process.env).length,
   });
 }
