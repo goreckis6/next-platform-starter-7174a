@@ -758,7 +758,54 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return null;
   }
 
-  function parseTransactionLine(line) {
+  // Enhanced function to parse multiple transactions from a single line
+  function parseMultipleTransactions(line) {
+    const src = (line || '').replace(/\s{2,}/g, ' ').trim();
+    if (!src) return [{}];
+
+    // Look for multiple date patterns which might indicate multiple transactions
+    const datePatterns = [
+      /\b([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})\b/g,
+      /\b(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})\b/g,
+      /\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g
+    ];
+
+    let dateMatches = [];
+    for (const pattern of datePatterns) {
+      let match;
+      while ((match = pattern.exec(src)) !== null) {
+        dateMatches.push({
+          match: match[0],
+          index: match.index,
+          fullMatch: match
+        });
+      }
+    }
+
+    // Sort by position in string
+    dateMatches.sort((a, b) => a.index - b.index);
+
+    // If we found multiple dates, split the line into multiple transactions
+    if (dateMatches.length > 1) {
+      const transactions = [];
+      for (let i = 0; i < dateMatches.length; i++) {
+        const start = dateMatches[i].index;
+        const end = i < dateMatches.length - 1 ? dateMatches[i + 1].index : src.length;
+        const segment = src.substring(start, end).trim();
+        const parsed = parseSingleTransaction(segment);
+        if (Object.keys(parsed).length > 0) {
+          transactions.push(parsed);
+        }
+      }
+      return transactions.length > 0 ? transactions : [parseSingleTransaction(src)];
+    }
+
+    // If only one or no dates, parse as single transaction
+    return [parseSingleTransaction(src)];
+  }
+
+  // Original single transaction parser, renamed for clarity
+  function parseSingleTransaction(line) {
     const src = (line || '').replace(/\s{2,}/g, ' ').trim();
     if (!src) return {};
 
@@ -816,6 +863,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
     return out;
   }
 
+  // Updated single transaction parser that uses the enhanced logic
+  function parseTransactionLine(line) {
+    const transactions = parseMultipleTransactions(line);
+    return transactions[0] || {};
+  }
+
   // ===== Zbierz dane wg kolejności DnD + mapowanie (opcjonalnie) =====
   const collectOrderedRows = useCallback((includeHeaders) => {
     const rows = [];
@@ -839,9 +892,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
           const rawCells = orderedCols.map((ci) => T.cells[ri]?.[ci] ?? "");
           if (mapDetectedRows && header.length) {
             const joined = rawCells.join(" ").replace(/\s{2,}/g, " ").trim();
-            const parsed = parseTransactionLine(joined);
-            const outRow = header.map((h) => parsed[h] ?? "");
-            rows.push(outRow);
+            // Use enhanced parsing that can detect multiple transactions
+            const transactions = parseMultipleTransactions(joined);
+            transactions.forEach((parsed) => {
+              const outRow = header.map((h) => parsed[h] ?? "");
+              rows.push(outRow);
+            });
           } else {
             rows.push(rawCells);
           }
@@ -851,9 +907,12 @@ export default function InspectClient({ pdfUrl, pdfData, uuid, pdfName: pdfNameP
       (d.loose || []).forEach((frag) => {
         const text = (frag.text || "").trim();
         if (mapDetectedRows && header.length) {
-          const parsed = parseTransactionLine(text);
-          const outRow = header.map((h) => parsed[h] ?? "");
-          rows.push(outRow);
+          // Use enhanced parsing that can detect multiple transactions
+          const transactions = parseMultipleTransactions(text);
+          transactions.forEach((parsed) => {
+            const outRow = header.map((h) => parsed[h] ?? "");
+            rows.push(outRow);
+          });
         } else {
           rows.push([text]);
         }
