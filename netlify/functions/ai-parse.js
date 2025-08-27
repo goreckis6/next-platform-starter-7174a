@@ -1,5 +1,5 @@
 // netlify/functions/ai-parse.js
-// Stabilne parse: OpenAI function-calling + twardy schemat + fallbacki.
+// Stabilne parsowanie: function-calling z poprawnym tool_choice + fallbacki.
 
 exports.handler = async function (event) {
   const J = (b, s = 200) => ({
@@ -10,13 +10,13 @@ exports.handler = async function (event) {
 
   if (event.httpMethod !== "POST") return J({ error: "Use POST" }, 405);
 
-  // --- wejście
+  // ---- wejście
   let data = null;
   try { data = JSON.parse(event.body || "{}"); } catch {}
   let text = (data && typeof data.text === "string") ? data.text.trim() : "";
   if (!text) return J({ error: "Missing 'text' in JSON body." }, 400);
 
-  // minimalizacja + limit znaków (bezpiecznie na Netlify)
+  // minimalizacja + limit (Netlify timeout-safe)
   text = text
     .replace(/\s+$/gm, "")
     .replace(/[ \t]{2,}/g, " ")
@@ -26,13 +26,10 @@ exports.handler = async function (event) {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return J({ error: "OPENAI_API_KEY missing in Function runtime." }, 500);
 
-  // --- pomocnicze
   const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
   const firstArrayOfObjects = (v) => {
-    // Znajdź pierwszą tablicę obiektów gdziekolwiek w JSON-ie (fallback).
     if (Array.isArray(v) && v.every(isObj)) return v;
     if (isObj(v)) {
-      // preferuj "transactions"
       if (Array.isArray(v.transactions) && v.transactions.every(isObj)) return v.transactions;
       for (const k of Object.keys(v)) {
         const hit = firstArrayOfObjects(v[k]);
@@ -43,10 +40,10 @@ exports.handler = async function (event) {
   };
 
   try {
-    const { default: OpenAI } = await import("openai"); // ESM dynamic import
+    const { default: OpenAI } = await import("openai"); // ESM import
     const client = new OpenAI({ apiKey: key });
 
-    // --- twardy schemat dla function calling
+    // ---- schema pod function calling
     const tool = {
       type: "function",
       function: {
@@ -60,7 +57,7 @@ exports.handler = async function (event) {
               type: "array",
               items: {
                 type: "object",
-                additionalProperties: true, // pozwalamy na dodatkowe klucze, ale wskazujemy pola docelowe
+                additionalProperties: true,
                 properties: {
                   "Date": { type: "string" },
                   "Source Date": { type: "string" },
@@ -91,38 +88,37 @@ exports.handler = async function (event) {
       {
         role: "system",
         content:
-          "Extract bank transactions and CALL the function with a 'transactions' array only. Never include commentary.",
+          "Extract bank transactions and CALL the function with a 'transactions' array only. No commentary.",
       },
       {
         role: "user",
         content:
-          "From the text below, extract bank transactions and return them via the function call argument 'transactions'. The fields may include: Date (YYYY-MM-DD), Source Date, Description, Credit, Debit, Amount, Balance, Currency, Reference Number, Reference 1, Reference 2, Transaction Type, Transaction Category, Branch, Sender/Receiver Name, Source Statement Page.\n\n" + text,
+          "From the text below, extract bank transactions and return them via the function call arg 'transactions'. Allowed fields: Date (YYYY-MM-DD), Source Date, Description, Credit, Debit, Amount, Balance, Currency, Reference Number, Reference 1, Reference 2, Transaction Type, Transaction Category, Branch, Sender/Receiver Name, Source Statement Page.\n\n" + text,
       },
     ];
 
-    // --- główne wywołanie: function calling wymusza JSON-arguments
+    // ---- główne wywołanie (UWAGA: poprawny tool_choice!)
     const resp = await client.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0,
       max_tokens: 900,
       tools: [tool],
-      tool_choice: { type: "function", function: "return_transactions" }, // wymuszamy tool
+      tool_choice: { type: "function", function: { name: "return_transactions" } },
       messages,
     });
 
-    // 1) Najpierw spróbuj odczytać arguments z tool_calls
+    // 1) argumenty z tool_calls
     let transactions = null;
     const choice = resp.choices?.[0];
-    const tc = choice?.message?.tool_calls?.[0];
-    if (tc?.function?.arguments) {
+    const call = choice?.message?.tool_calls?.[0];
+    if (call?.function?.arguments) {
       try {
-        const args = JSON.parse(tc.function.arguments);
-        const arr = args?.transactions;
-        if (Array.isArray(arr)) transactions = arr;
-      } catch {} // przejdź do fallbacków
+        const args = JSON.parse(call.function.arguments);
+        if (Array.isArray(args?.transactions)) transactions = args.transactions;
+      } catch {}
     }
 
-    // 2) Fallback: model mógł jednak zwrócić content
+    // 2) fallback: content -> JSON -> pierwsza tablica obiektów
     if (!transactions) {
       const content = (choice?.message?.content || "").trim();
       if (content) {
@@ -141,16 +137,15 @@ exports.handler = async function (event) {
       }
     }
 
-    // 3) Ostatni fallback: brak danych => błąd warstwy 502
     if (!Array.isArray(transactions)) {
       return J({ error: "AI did not return an array of transactions." }, 502);
     }
 
-    // (opcjonalnie) lekkie czyszczenie typów liczbowych w polach kwotowych
+    // lekka normalizacja liczb
     const numish = (v) => {
       if (v == null) return v;
       if (typeof v === "number") return v;
-      const s = String(v).replace(/\s/g, "").replace(",", "."); // 1 234,56 -> 1234.56
+      const s = String(v).replace(/\s/g, "").replace(",", ".");
       const m = s.match(/^[-+]?(\d+(\.\d+)?|\.\d+)$/);
       return m ? parseFloat(s) : v;
     };
@@ -165,10 +160,7 @@ exports.handler = async function (event) {
 
     return J({ transactions });
   } catch (e) {
-    const msg =
-      e?.response?.data?.error?.message ||
-      e?.message ||
-      "Unknown error";
+    const msg = e?.response?.data?.error?.message || e?.message || "Unknown error";
     return J({ error: "AI parsing failed: " + msg }, 500);
   }
 };
